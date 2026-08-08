@@ -1,0 +1,10 @@
+[package]
+name = "goscript"
+version = "0.1.0"
+edition = "2021"
+description = "GoScript: an embeddable scripting language with Go syntax, written in pure Rust for game engines"
+license = "MIT OR Apache-2.0"
+keywords = ["scripting", "game-engine", "embedded", "go", "language"]
+categories = ["embedded", "game-development"]
+
+[dependencies]
