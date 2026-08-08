@@ -65,6 +65,11 @@ pub struct VirtualMachine {
     /// engines to register capturing closures, e.g. keyboard state captured
     /// per frame.
     host_fns: HashMap<String, Rc<dyn Fn(Vec<Value>) -> Value>>,
+    /// P0 anti-freeze guard: cap on executed bytecode instructions per
+    /// `execute`/`call`, so runaway scripts (e.g. `for {}`) surface a timeout
+    /// error instead of hanging the host engine. `None` disables the limit.
+    max_instructions: Option<u64>,
+    instruction_count: u64,
 }
 
 impl VirtualMachine {
@@ -74,9 +79,17 @@ impl VirtualMachine {
             stack: Vec::new(),
             globals: HashMap::new(),
             host_fns: HashMap::new(),
+            max_instructions: Some(1_000_000),
+            instruction_count: 0,
         };
         vm.register_std_lib();
         vm
+    }
+
+    /// Configures the anti-freeze instruction budget. `Some(n)` kills scripts
+    /// after `n` executed bytecode instructions; `None` disables the guard.
+    pub fn set_max_instructions(&mut self, max_instructions: Option<u64>) {
+        self.max_instructions = max_instructions;
     }
 
     /// Injects the GoScript native standard library (`math`, `fmt`, `rand`,
@@ -98,6 +111,35 @@ impl VirtualMachine {
                 Value::Slice(items.clone())
             }
             _ => Value::Nil,
+        });
+
+        // -------------------------------------------------------------------
+        // explicit type casts: int(x), float64(x), string(x), bool(x)
+        // -------------------------------------------------------------------
+        self.register_fn("int", |args| match args.first() {
+            Some(Value::Int(v)) => Value::Int(*v),
+            Some(Value::Float(v)) => Value::Int(*v as i64),
+            Some(Value::String(s)) => Value::Int(s.trim().parse().unwrap_or(0)),
+            Some(Value::Bool(b)) => Value::Int(if *b { 1 } else { 0 }),
+            _ => Value::Int(0),
+        });
+
+        self.register_fn("float64", |args| match args.first() {
+            Some(Value::Int(v)) => Value::Float(*v as f64),
+            Some(Value::Float(v)) => Value::Float(*v),
+            Some(Value::String(s)) => Value::Float(s.trim().parse().unwrap_or(0.0)),
+            _ => Value::Float(0.0),
+        });
+
+        self.register_fn("string", |args| match args.first() {
+            Some(Value::String(s)) => Value::String(s.clone()),
+            Some(v) => Value::String(v.to_string()),
+            None => Value::String(String::new()),
+        });
+
+        self.register_fn("bool", |args| match args.first() {
+            Some(v) => Value::Bool(v.truthy()),
+            None => Value::Bool(false),
         });
 
         // -------------------------------------------------------------------
@@ -252,6 +294,7 @@ impl VirtualMachine {
     }
 
     pub fn execute(&mut self, main_fn: Rc<CompiledFunction>) -> Result<(), Error> {
+        self.instruction_count = 0;
         self.frames.clear();
         self.stack.clear();
         self.frames.push(CallFrame {
@@ -278,6 +321,7 @@ impl VirtualMachine {
                     ip: 0,
                     slots_offset,
                 });
+                self.instruction_count = 0;
                 self.run()?;
                 Ok(self.stack.pop().unwrap_or(Value::Nil))
             }
@@ -290,6 +334,18 @@ impl VirtualMachine {
     fn run(&mut self) -> Result<(), Error> {
         while let Some(mut frame) = self.frames.pop() {
             while frame.ip < frame.function.code.len() {
+                if let Some(max) = self.max_instructions {
+                    self.instruction_count += 1;
+                    if self.instruction_count > max {
+                        return Err(Error::runtime_at(
+                            format!(
+                                "instruction budget exceeded ({} instructions) - possible infinite loop",
+                                max
+                            ),
+                            line_of(&frame),
+                        ));
+                    }
+                }
                 let op = OpCode::from(frame.function.code[frame.ip]);
                 frame.ip += 1;
                 match op {
@@ -330,9 +386,10 @@ impl VirtualMachine {
                             Value::Int(i) => self.stack.push(Value::Int(i.wrapping_neg())),
                             Value::Float(f) => self.stack.push(Value::Float(-f)),
                             other => {
-                                return Err(Error::runtime(format!(
-                                    "cannot negate a non-numeric value ({other})"
-                                )));
+                                return Err(Error::runtime_at(
+                                    format!("cannot negate a non-numeric value ({other})"),
+                                    line_of(&frame),
+                                ));
                             }
                         }
                     }
@@ -440,9 +497,10 @@ impl VirtualMachine {
                                 };
                             }
                             _ => {
-                                return Err(Error::runtime(format!(
-                                    "callee '{callee_name}' is not a function"
-                                )));
+                                return Err(Error::runtime_at(
+                                    format!("callee '{callee_name}' is not a function"),
+                                    line_of(&frame),
+                                ));
                             }
                         }
                     }
@@ -535,10 +593,13 @@ impl VirtualMachine {
                                 if idx < items.len() {
                                     items[idx] = value;
                                 } else {
-                                    return Err(Error::runtime(format!(
-                                        "index {idx} out of bounds for slice of length {}",
-                                        items.len()
-                                    )));
+                                    return Err(Error::runtime_at(
+                                        format!(
+                                            "index {idx} out of bounds for slice of length {}",
+                                            items.len()
+                                        ),
+                                        line_of(&frame),
+                                    ));
                                 }
                             }
                             (Value::Map(map), Value::String(k)) => {
@@ -548,8 +609,9 @@ impl VirtualMachine {
                                 map.borrow_mut().insert(other.to_string(), value);
                             }
                             _ => {
-                                return Err(Error::runtime(
+                                return Err(Error::runtime_at(
                                     "cannot index into a non-collection value",
+                                    line_of(&frame),
                                 ));
                             }
                         }
@@ -569,9 +631,12 @@ impl VirtualMachine {
                         let type_name = match &receiver {
                             Value::Struct(inst) => inst.borrow().type_name.clone(),
                             _ => {
-                                return Err(Error::runtime(format!(
-                                    "cannot call method '{method}' on a non-struct value"
-                                )));
+                                return Err(Error::runtime_at(
+                                    format!(
+                                        "cannot call method '{method}' on a non-struct value"
+                                    ),
+                                    line_of(&frame),
+                                ));
                             }
                         };
                         // Methods are registered as `<TypeName>.<Method>` globals
@@ -592,9 +657,10 @@ impl VirtualMachine {
                                 };
                             }
                             _ => {
-                                return Err(Error::runtime(format!(
-                                    "method '{method}' is not defined for '{type_name}'"
-                                )));
+                                return Err(Error::runtime_at(
+                                    format!("method '{method}' is not defined for '{type_name}'"),
+                                    line_of(&frame),
+                                ));
                             }
                         }
                     }
@@ -613,12 +679,15 @@ impl VirtualMachine {
                                 self.stack.push(value);
                             }
                             other => {
-                                return Err(Error::runtime(format!(
-                                    "cannot read field '{field}' from {}",
-                                    other
-                                        .map(|v| v.to_string())
-                                        .unwrap_or_else(|| "nil".into())
-                                )));
+                                return Err(Error::runtime_at(
+                                    format!(
+                                        "cannot read field '{field}' from {}",
+                                        other
+                                            .map(|v| v.to_string())
+                                            .unwrap_or_else(|| "nil".into())
+                                    ),
+                                    line_of(&frame),
+                                ));
                             }
                         }
                     }
@@ -632,12 +701,15 @@ impl VirtualMachine {
                                 instance.borrow_mut().fields.insert(field, value);
                             }
                             other => {
-                                return Err(Error::runtime(format!(
-                                    "cannot set field '{field}' on {}",
-                                    other
-                                        .map(|v| v.to_string())
-                                        .unwrap_or_else(|| "nil".into())
-                                )));
+                                return Err(Error::runtime_at(
+                                    format!(
+                                        "cannot set field '{field}' on {}",
+                                        other
+                                            .map(|v| v.to_string())
+                                            .unwrap_or_else(|| "nil".into())
+                                    ),
+                                    line_of(&frame),
+                                ));
                             }
                         }
                     }
@@ -782,6 +854,17 @@ fn string_constant<'a>(function: &'a CompiledFunction, idx: usize) -> &'a str {
         Some(Value::String(s)) => s.as_str(),
         _ => "",
     }
+}
+
+/// Source line of the instruction the given frame is currently executing
+/// (P1 line mapping). Falls back to 0 when no line info is available.
+fn line_of(frame: &CallFrame) -> usize {
+    frame
+        .function
+        .lines
+        .get(frame.ip.saturating_sub(1))
+        .copied()
+        .unwrap_or(0)
 }
 
 impl Default for VirtualMachine {
@@ -1021,6 +1104,74 @@ func IsAlive(hp int) int {
 "#;
         assert_eq!(script_returns(src, "IsAlive", vec![Value::Int(30)]), "1");
         assert_eq!(script_returns(src, "IsAlive", vec![Value::Int(0)]), "0");
+    }
+
+    #[test]
+    fn anti_freeze_guard_aborts_infinite_loop() {
+        let src = "func Spin() int { var n = 0\n for { n = n + 1 }\n return n }\n";
+        let mut vm = VirtualMachine::new();
+        vm.set_max_instructions(Some(100));
+        let chunk = vm.compile(src).unwrap();
+        vm.execute(chunk).unwrap();
+        let err = vm.call("Spin", vec![]).unwrap_err();
+        assert!(err.message.contains("instruction budget exceeded"));
+        assert!(err.line > 0);
+        // Restore unlimited so sibling tests keep their budget.
+        vm.set_max_instructions(None);
+    }
+
+    #[test]
+    fn runtime_errors_carry_source_lines() {
+        let src = "var nums = []int{1, 2, 3}\nvar boom = 0\nfunc Steal() int {\n    nums[9] = 1\n    return 0\n}\n";
+        let mut vm = VirtualMachine::new();
+        let chunk = vm.compile(src).unwrap();
+        vm.execute(chunk).unwrap();
+        let err = vm.call("Steal", vec![]).unwrap_err();
+        assert!(err.message.contains("out of bounds"));
+        assert_eq!(err.line, 4, "expected the failing statement's line");
+    }
+
+    #[test]
+    fn range_loop_over_slice() {
+        let src = r#"
+func Sum() int {
+    var total = 0
+    var nums = []int{3, 5, 7}
+    for i, v := range nums {
+        total = total + v
+    }
+    return total
+}
+func Count() int {
+    var n = 0
+    var names = []string{"a", "b", "c", "d"}
+    for _i := range names {
+        n = n + 1
+    }
+    return n
+}
+"#;
+        assert_eq!(script_returns(src, "Sum", vec![]), "15");
+        assert_eq!(script_returns(src, "Count", vec![]), "4");
+    }
+
+    #[test]
+    fn explicit_type_casts() {
+        let src = r#"
+func ToInts() int { return int(3.9) }
+func ToFloats() float64 { return float64(2) }
+func ToStrings() string { return string(42) }
+func ToBools() int {
+    if bool(1) && !bool(0) { return 1 }
+    return 0
+}
+func FromText() int { return int("7") }
+"#;
+        assert_eq!(script_returns(src, "ToInts", vec![]), "3");
+        assert_eq!(script_returns(src, "ToFloats", vec![]), "2");
+        assert_eq!(script_returns(src, "ToStrings", vec![]), "42");
+        assert_eq!(script_returns(src, "ToBools", vec![]), "1");
+        assert_eq!(script_returns(src, "FromText", vec![]), "7");
     }
 
     #[test]

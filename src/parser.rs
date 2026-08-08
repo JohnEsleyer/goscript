@@ -34,6 +34,11 @@ impl Parser {
         Ok(tok)
     }
 
+    /// Line number of the current token (for source-mapped P1 instruction lines).
+    fn cur_line(&self) -> usize {
+        self.peek().map(|t| t.line).unwrap_or(1)
+    }
+
     fn is_semicolon(&self) -> bool {
         matches!(self.cur_kind(), Some(TokenKind::Semicolon))
     }
@@ -134,21 +139,24 @@ impl Parser {
             Some(TokenKind::For) => self.parse_for(),
             Some(TokenKind::Switch) => self.parse_switch(),
             Some(TokenKind::Return) => {
+                let line = self.cur_line();
                 self.pos += 1;
                 let stmt = if self.is_semicolon() || self.is_rbrace_or_eof() {
-                    Stmt::Return(None)
+                    Stmt::Return(None, line)
                 } else {
-                    Stmt::Return(Some(self.parse_expression()?))
+                    Stmt::Return(Some(self.parse_expression()?), line)
                 };
                 Ok(stmt)
             }
             Some(TokenKind::Break) => {
+                let line = self.cur_line();
                 self.pos += 1;
-                Ok(Stmt::Break)
+                Ok(Stmt::Break(line))
             }
             Some(TokenKind::Continue) => {
+                let line = self.cur_line();
                 self.pos += 1;
-                Ok(Stmt::Continue)
+                Ok(Stmt::Continue(line))
             }
             Some(TokenKind::LBrace) => {
                 let tok = self.peek().cloned().unwrap();
@@ -159,6 +167,7 @@ impl Parser {
     }
 
     fn parse_var_decl(&mut self) -> Result<Stmt, Error> {
+        let line = self.cur_line();
         self.pos += 1; // 'var'
         let name = self.expect_identifier("variable name")?;
         self.skip_type_if_present();
@@ -169,10 +178,11 @@ impl Parser {
             }
             _ => None,
         };
-        Ok(Stmt::VarDecl { name, init })
+        Ok(Stmt::VarDecl { name, init, line })
     }
 
     fn parse_struct_decl(&mut self) -> Result<Stmt, Error> {
+        let line = self.cur_line();
         self.pos += 1; // 'type'
         let name = self.expect_identifier("struct type name")?;
         self.expect(&TokenKind::Struct, "'struct'")?;
@@ -190,10 +200,11 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::RBrace, "'}'")?;
-        Ok(Stmt::StructDecl { name, fields })
+        Ok(Stmt::StructDecl { name, fields, line })
     }
 
     fn parse_func_decl(&mut self) -> Result<Stmt, Error> {
+        let line = self.cur_line();
         self.pos += 1; // 'func'
         let mut receiver = None;
         // Receiver method: `func (p *Player) TakeDamage(amount int)`.
@@ -241,10 +252,12 @@ impl Parser {
             receiver,
             params,
             body,
+            line,
         })
     }
 
     fn parse_if(&mut self) -> Result<Stmt, Error> {
+        let line = self.cur_line();
         self.pos += 1; // 'if'
         let condition = self.parse_expression()?;
         let then_branch = self.parse_block()?;
@@ -262,10 +275,12 @@ impl Parser {
             condition,
             then_branch,
             else_branch,
+            line,
         })
     }
 
     fn parse_for(&mut self) -> Result<Stmt, Error> {
+        let line = self.cur_line();
         self.pos += 1; // 'for'
         if matches!(self.cur_kind(), Some(TokenKind::LBrace)) {
             let body = self.parse_block()?;
@@ -274,6 +289,59 @@ impl Parser {
                 condition: None,
                 post: None,
                 body,
+                line,
+            });
+        }
+
+        // `for i, v := range coll { ... }` / `for i := range coll { ... }`.
+        if self.is_range_clause() {
+            let (index_var, value_var, target) = self.parse_range_clause()?;
+            let body = self.parse_block()?;
+            // Desugar into an equivalent indexed for loop over the target:
+            //   init: var i = 0
+            //   cond: i < len(target)
+            //   post: i = i + 1
+            //   body: var v = target[i] (when a value variable is requested)
+            let init = Stmt::VarDecl {
+                name: index_var.clone(),
+                init: Some(Expr::Literal(Value::Int(0))),
+                line,
+            };
+            let condition = Some(Expr::Binary {
+                left: Box::new(Expr::Identifier(index_var.clone())),
+                op: BinaryOp::Less,
+                right: Box::new(Expr::Call {
+                    callee: "len".to_string(),
+                    args: vec![target.clone()],
+                }),
+            });
+            let post = Stmt::Assign {
+                name: index_var.clone(),
+                value: Expr::Binary {
+                    left: Box::new(Expr::Identifier(index_var.clone())),
+                    op: BinaryOp::Add,
+                    right: Box::new(Expr::Literal(Value::Int(1))),
+                },
+                line,
+            };
+            let mut range_body = Vec::new();
+            if let Some(value_var) = value_var {
+                range_body.push(Stmt::VarDecl {
+                    name: value_var,
+                    init: Some(Expr::GetIndex {
+                        object: Box::new(target.clone()),
+                        index: Box::new(Expr::Identifier(index_var)),
+                    }),
+                    line,
+                });
+            }
+            range_body.extend(body);
+            return Ok(Stmt::For {
+                init: Some(Box::new(init)),
+                condition,
+                post: Some(Box::new(post)),
+                body: range_body,
+                line,
             });
         }
 
@@ -299,10 +367,11 @@ impl Parser {
                 condition,
                 post,
                 body,
+                line,
             })
         } else {
             let condition = match init_clause {
-                Stmt::Expr(expr) => Some(expr),
+                Stmt::Expr(expr, _) => Some(expr),
                 _ => {
                     let tok = self.peek().cloned().unwrap();
                     return Err(Error::new(
@@ -318,8 +387,43 @@ impl Parser {
                 condition,
                 post: None,
                 body,
+                line,
             })
         }
+    }
+
+    /// `for <id> [, <id>] := range <target>`?
+    fn is_range_clause(&self) -> bool {
+        let is_id = |k: Option<TokenKind>| matches!(k, Some(TokenKind::Identifier(_)));
+        let is_range = |k: Option<TokenKind>| {
+            matches!(k, Some(TokenKind::Identifier(word)) if word == "range")
+        };
+        is_id(self.tokens.get(self.pos).map(|t| t.kind.clone()))
+            && (self.tokens.get(self.pos + 1).map(|t| t.kind.clone())
+                == Some(TokenKind::ShortAssign))
+            && is_range(self.tokens.get(self.pos + 2).map(|t| t.kind.clone()))
+            || (is_id(self.tokens.get(self.pos).map(|t| t.kind.clone()))
+                && self.tokens.get(self.pos + 1).map(|t| t.kind.clone())
+                    == Some(TokenKind::Comma)
+                && is_id(self.tokens.get(self.pos + 2).map(|t| t.kind.clone()))
+                && self.tokens.get(self.pos + 3).map(|t| t.kind.clone())
+                    == Some(TokenKind::ShortAssign)
+                && is_range(self.tokens.get(self.pos + 4).map(|t| t.kind.clone())))
+    }
+
+    /// Consumes `i [, v] := range` and returns `(index, value, target expr)`.
+    fn parse_range_clause(&mut self) -> Result<(String, Option<String>, Expr), Error> {
+        let index_var = self.expect_identifier("range index variable")?;
+        let value_var = if matches!(self.cur_kind(), Some(TokenKind::Comma)) {
+            self.pos += 1;
+            Some(self.expect_identifier("range value variable")?)
+        } else {
+            None
+        };
+        self.expect(&TokenKind::ShortAssign, "':='")?;
+        self.expect_identifier("'range' keyword")?;
+        let target = self.parse_expression()?;
+        Ok((index_var, value_var, target))
     }
 
     fn parse_for_clause(&mut self) -> Result<Stmt, Error> {
@@ -330,6 +434,7 @@ impl Parser {
     }
 
     fn parse_switch(&mut self) -> Result<Stmt, Error> {
+        let line = self.cur_line();
         self.pos += 1; // 'switch'
         let expr = self.parse_expression()?;
         self.expect(&TokenKind::LBrace, "'{'")?;
@@ -410,26 +515,30 @@ impl Parser {
             expr,
             cases,
             default_case,
+            line,
         })
     }
 
     fn parse_expr_statement(&mut self) -> Result<Stmt, Error> {
+        let line = self.cur_line();
         let expr = self.parse_expression()?;
         match self.cur_kind() {
             Some(TokenKind::Assign) => {
                 self.pos += 1;
                 let value = self.parse_expression()?;
                 match expr {
-                    Expr::Identifier(name) => Ok(Stmt::Assign { name, value }),
+                    Expr::Identifier(name) => Ok(Stmt::Assign { name, value, line }),
                     Expr::GetField { object, field } => Ok(Stmt::SetField {
                         object: *object,
                         field,
                         value,
+                        line,
                     }),
                     Expr::GetIndex { object, index } => Ok(Stmt::SetIndex {
                         object: *object,
                         index: *index,
                         value,
+                        line,
                     }),
                     _ => {
                         let tok = self.peek().cloned().unwrap();
@@ -444,6 +553,7 @@ impl Parser {
                     Expr::Identifier(name) => Ok(Stmt::VarDecl {
                         name,
                         init: Some(value),
+                        line,
                     }),
                     _ => {
                         let tok = self.peek().cloned().unwrap();
@@ -468,7 +578,7 @@ impl Parser {
                 };
                 self.pos += 1;
                 let value = self.parse_expression()?;
-                self.desugar_compound(expr, op, value)
+                self.desugar_compound(expr, op, value, line)
             }
             // `x++` / `x--` are sugar for `x = x + 1` / `x = x - 1`.
             Some(TokenKind::PlusPlus) | Some(TokenKind::MinusMinus) => {
@@ -478,9 +588,9 @@ impl Parser {
                     BinaryOp::Sub
                 };
                 self.pos += 1;
-                self.desugar_compound(expr, op, Expr::Literal(Value::Int(1)))
+                self.desugar_compound(expr, op, Expr::Literal(Value::Int(1)), line)
             }
-            _ => Ok(Stmt::Expr(expr)),
+            _ => Ok(Stmt::Expr(expr, line)),
         }
     }
 
@@ -491,6 +601,7 @@ impl Parser {
         expr: Expr,
         op: BinaryOp,
         rhs: Expr,
+        line: usize,
     ) -> Result<Stmt, Error> {
         match &expr {
             Expr::Identifier(name) => Ok(Stmt::Assign {
@@ -500,6 +611,7 @@ impl Parser {
                     op,
                     right: Box::new(rhs),
                 },
+                line,
             }),
             Expr::GetField { object, field } => Ok(Stmt::SetField {
                 object: (**object).clone(),
@@ -512,6 +624,7 @@ impl Parser {
                     op,
                     right: Box::new(rhs),
                 },
+                line,
             }),
             Expr::GetIndex { object, index } => Ok(Stmt::SetIndex {
                 object: (**object).clone(),
@@ -524,6 +637,7 @@ impl Parser {
                     op,
                     right: Box::new(rhs),
                 },
+                line,
             }),
             _ => {
                 let tok = self.peek().cloned().unwrap();
@@ -850,6 +964,39 @@ impl Parser {
                 let inner = self.parse_expression()?;
                 self.expect(&TokenKind::RParen, "')'")?;
                 Ok(inner)
+            }
+            TokenKind::Type(name) => {
+                // Explicit type casts are written as plain calls on a type
+                // name: `int(x)`, `float64(x)`, `string(v)`, `bool(flag)`.
+                if matches!(self.cur_kind(), Some(TokenKind::LParen)) {
+                    self.pos += 1;
+                    let mut args = Vec::new();
+                    loop {
+                        if matches!(
+                            self.cur_kind(),
+                            Some(TokenKind::RParen) | Some(TokenKind::Eof)
+                        ) {
+                            break;
+                        }
+                        args.push(self.parse_expression()?);
+                        if matches!(self.cur_kind(), Some(TokenKind::Comma)) {
+                            self.pos += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    self.expect(&TokenKind::RParen, "')'")?;
+                    Ok(Expr::Call {
+                        callee: name,
+                        args,
+                    })
+                } else {
+                    Err(Error::new(
+                        format!("unexpected type '{}' in expression", name),
+                        tok.line,
+                        tok.col,
+                    ))
+                }
             }
             other => Err(Error::new(
                 format!("unexpected {}, expected expression", other.describe()),

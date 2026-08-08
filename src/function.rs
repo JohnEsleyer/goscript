@@ -4,6 +4,9 @@ pub struct CompiledFunction {
     pub arity: usize,
     pub code: Vec<u8>,
     pub constants: Vec<crate::value::Value>,
+    /// Source line recorded for each bytecode op byte (parallel to `code`).
+    /// Used to surface script line numbers on runtime errors.
+    pub lines: Vec<usize>,
 }
 
 impl CompiledFunction {
@@ -13,6 +16,7 @@ impl CompiledFunction {
             arity: 0,
             code: Vec::new(),
             constants: Vec::new(),
+            lines: Vec::new(),
         }
     }
 }

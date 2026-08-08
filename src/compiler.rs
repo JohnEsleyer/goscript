@@ -16,6 +16,8 @@ pub struct Compiler {
     locals: Vec<String>,
     scope_depth: usize,
     loops: Vec<LoopContext>,
+    /// Statement line for the next emitted opcode (P1 line tracking).
+    current_line: usize,
     pub preserve_existing: HashSet<String>,
 }
 
@@ -26,6 +28,7 @@ impl Compiler {
             locals: Vec::new(),
             scope_depth: 0,
             loops: Vec::new(),
+            current_line: 0,
             preserve_existing: HashSet::new(),
         }
     }
@@ -45,10 +48,12 @@ impl Compiler {
 
     fn emit_op(&mut self, op: OpCode) {
         self.function.code.push(op as u8);
+        self.function.lines.push(self.current_line);
     }
 
     fn emit_byte(&mut self, byte: u8) {
         self.function.code.push(byte);
+        self.function.lines.push(self.current_line);
     }
 
     fn emit_constant(&mut self, value: Value) {
@@ -94,7 +99,8 @@ impl Compiler {
 
     fn compile_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::VarDecl { name, init } => {
+            Stmt::VarDecl { name, init, line } => {
+                self.current_line = *line;
                 if self.scope_depth > 0 {
                     // Local variable.
                     self.locals.push(name.clone());
@@ -116,7 +122,8 @@ impl Compiler {
                     self.emit_byte(idx);
                 }
             }
-            Stmt::Assign { name, value } => {
+            Stmt::Assign { name, value, line } => {
+                self.current_line = *line;
                 self.compile_expr(value);
                 if let Some(local_idx) = self.resolve_local(name) {
                     self.emit_op(OpCode::SetLocal);
@@ -127,14 +134,16 @@ impl Compiler {
                     self.emit_byte(idx);
                 }
             }
-            Stmt::SetField { object, field, value } => {
+            Stmt::SetField { object, field, value, line } => {
+                self.current_line = *line;
                 self.compile_expr(object);
                 self.compile_expr(value);
                 let idx = self.name_constant(field);
                 self.emit_op(OpCode::SetField);
                 self.emit_byte(idx);
             }
-            Stmt::SetIndex { object, index, value } => {
+            Stmt::SetIndex { object, index, value, line } => {
+                self.current_line = *line;
                 self.compile_expr(object);
                 self.compile_expr(index);
                 self.compile_expr(value);
@@ -144,7 +153,9 @@ impl Compiler {
                 condition,
                 then_branch,
                 else_branch,
+                line,
             } => {
+                self.current_line = *line;
                 self.compile_expr(condition);
                 let cond_jump = self.emit_jump_placeholder(OpCode::JumpIfFalse);
                 self.compile_block(then_branch);
@@ -165,7 +176,9 @@ impl Compiler {
                 condition,
                 post,
                 body,
+                line,
             } => {
+                self.current_line = *line;
                 if let Some(init) = init {
                     self.compile_stmt(init);
                 }
@@ -209,7 +222,9 @@ impl Compiler {
                 expr,
                 cases,
                 default_case,
+                line,
             } => {
+                self.current_line = *line;
                 // Evaluate the switch expression per case and jump to the
                 // matching one. Each failing case falls through to the next.
                 let mut case_exits = Vec::new();
@@ -237,7 +252,9 @@ impl Compiler {
                 receiver,
                 params,
                 body,
+                line,
             } => {
+                self.current_line = *line;
                 // Receiver methods live under `Type.Method` so runtime
                 // method dispatch can find them from the struct's type name.
                 let fn_name = match receiver {
@@ -260,11 +277,14 @@ impl Compiler {
                 self.emit_op(OpCode::SetGlobal);
                 self.emit_byte(idx);
             }
-            Stmt::StructDecl { .. } => {
+            Stmt::StructDecl { line, .. } => {
                 // Struct types are compile-time metadata only; struct instances
                 // keep their own dynamic field maps at runtime.
+                self.current_line = *line;
             }
-            Stmt::Return(value) => match value {
+            Stmt::Return(value, line) => {
+                self.current_line = *line;
+                match value {
                 Some(expr) => {
                     self.compile_expr(expr);
                     self.emit_op(OpCode::Return);
@@ -273,20 +293,24 @@ impl Compiler {
                     self.emit_op(OpCode::Nil);
                     self.emit_op(OpCode::Return);
                 }
-            },
-            Stmt::Break => {
+            }
+            }
+            Stmt::Break(line) => {
+                self.current_line = *line;
                 let operand_pos = self.emit_jump_placeholder(OpCode::Jump);
                 if let Some(ctx) = self.loops.last_mut() {
                     ctx.break_jumps.push(operand_pos);
                 }
             }
-            Stmt::Continue => {
+            Stmt::Continue(line) => {
+                self.current_line = *line;
                 let operand_pos = self.emit_jump_placeholder(OpCode::Jump);
                 if let Some(ctx) = self.loops.last_mut() {
                     ctx.continue_jumps.push(operand_pos);
                 }
             }
-            Stmt::Expr(expr) => {
+            Stmt::Expr(expr, line) => {
+                self.current_line = *line;
                 self.compile_expr(expr);
                 self.emit_op(OpCode::Pop);
             }

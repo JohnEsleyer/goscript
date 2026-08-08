@@ -9,6 +9,11 @@
 //! - [`HotReloadEngine`]: recompiles a script file when it changes, preserving
 //!   live global state across reloads.
 //!
+//! Robustness features:
+//! - anti-freeze instruction guard ([`VirtualMachine::set_max_instructions`])
+//! - runtime errors carry script source lines (P1 source mapping)
+//! - `range` loops and explicit type casts (`int`, `float64`, `string`, `bool`)
+//!
 //! Example:
 //! ```
 //! use goscript::value::Value;

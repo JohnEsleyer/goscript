@@ -15,6 +15,13 @@ impl Error {
     pub fn runtime(message: impl Into<String>) -> Self {
         Self { message: message.into(), line: 0, col: 0 }
     }
+
+    /// A runtime error anchored to a source line (e.g. the instruction that
+    /// raised it). Kept distinct from [`Error::runtime`] so callers that only
+    /// produce line-less errors stay unchanged.
+    pub fn runtime_at(message: impl Into<String>, line: usize) -> Self {
+        Self { message: message.into(), line, col: 0 }
+    }
 }
 
 impl fmt::Display for Error {
