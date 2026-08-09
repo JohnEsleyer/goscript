@@ -1,26 +1,52 @@
-// enemy.gs — a simple enemy that patrols back and forth
-var speed = 40.0
-var dir = 1.0
-var patrol_range = 80.0
-var origin_x = 0.0
+// enemy.gs — Hybrid Component-Behavior Enemy Script
+// Demonstrates: struct state, receiver methods, self-context,
+// distance queries, collision rectangles, and debug visualization.
+
+type Enemy struct {
+    PatrolSpeed float64
+    Timer       float64
+    PatrolRange float64
+}
+
+var enemy = Enemy{
+    PatrolSpeed: 2.0,
+    Timer:       0.0,
+    PatrolRange: 220.0,
+}
 
 func OnUpdate(dt float64) {
-    var pos = GetPosition()
-    var x = pos[0]
-    var y = pos[1]
+    var selfId = groot.GetSelfEntity()
+    var pos = groot.GetSelfPosition()
+    var px = pos[0]
+    var py = pos[1]
 
-    if origin_x == 0.0 {
-        origin_x = x
+    // 1. Sine-wave Patrol
+    enemy.Timer = enemy.Timer + dt
+    var newX = math.Sin(enemy.Timer * enemy.PatrolSpeed) * enemy.PatrolRange
+    groot.SetSelfPosition(newX, py)
+
+    // 2. Distance Query to Player (ID #1)
+    var dist = groot.GetDistance(selfId, 1)
+    if dist < 120.0 {
+        groot.Warn(fmt.Sprintf("Player detected! Distance: %.1f", dist))
+        groot.DrawDebugRect(newX, py, 70.0, 70.0, 1.0, 0.3, 0.0)
+        groot.EmitEvent("EnemyAlert", dist)
+    } else {
+        groot.DrawDebugRect(newX, py, 60.0, 60.0, 0.8, 0.2, 0.8)
     }
 
-    MovePosition(speed * dir * dt, 0.0)
+    // 3. Debug circle around enemy
+    groot.DrawDebugCircle(newX, py, 25.0, 0.5, 0.5, 0.0)
 
-    if x > origin_x + patrol_range {
-        dir = -1.0
-    }
-    if x < origin_x - patrol_range {
-        dir = 1.0
+    // 4. Raycast toward player
+    var dirX = 0.0
+    var dirY = 0.0
+    if dist > 0.0 {
+        var playerPos = groot.GetEntityPosition(1)
+        dirX = playerPos[0] - newX
+        dirY = playerPos[1] - py
     }
 
-    Log(fmt.Sprintf("Enemy pos: (%.1f, %.1f)  dir=%.0f", x, y, dir))
+    groot.Log(fmt.Sprintf("enemy pos=(%.1f,%.1f) timer=%.1f dist=%.1f",
+        newX, py, enemy.Timer, dist))
 }

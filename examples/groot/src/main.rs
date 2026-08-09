@@ -1,105 +1,117 @@
 mod bridge;
-mod module;
-mod plugin;
+mod groot_module;
+mod groot_plugin;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use bridge::{GrootScriptHost, InputState, ScriptBridgeState};
+use bridge::{ EntityState, GrootScriptHost, InputState, ScriptBridgeState};
 
 fn main() {
-    println!("=== GoScript Multi-Entity Runtime Demo ===");
+    println!("=== Groot Engine — Hybrid Component-Behavior Architecture ===");
+    println!("   Raylib ergonomics + ECS entity isolation + event bus");
     println!();
 
-    // Shared world state.
     let bridge = Rc::new(RefCell::new(ScriptBridgeState::new()));
     let mut host = GrootScriptHost::new();
 
     // ------------------------------------------------------------------
-    // Scene setup — spawn entities at initial positions.
+    // Scene setup — Player (ID #1) and Enemy (ID #2)
     // ------------------------------------------------------------------
     {
         let mut st = bridge.borrow_mut();
 
-        // Player
         let player_id = st.spawn_id();
-        st.positions.insert(player_id, (400.0, 300.0));
-        st.entity_scripts
-            .insert(player_id, "scripts/player.gs".to_string());
-
-        // Enemy
-        let enemy_id = st.spawn_id();
-        st.positions.insert(enemy_id, (200.0, 150.0));
-        st.entity_scripts
-            .insert(enemy_id, "scripts/enemy.gs".to_string());
-
-        // NPC
-        let npc_id = st.spawn_id();
-        st.positions.insert(npc_id, (600.0, 400.0));
-        st.entity_scripts
-            .insert(npc_id, "scripts/npc.gs".to_string());
-
-        // Store IDs so we can reference them later.
-        st.entity_scripts
-            .insert(player_id, "scripts/player.gs".to_string());
-        println!(
-            "[setup] player={:?} enemy={:?} npc={:?}",
-            player_id, enemy_id, npc_id
+        st.entity_states.insert(
+            player_id,
+            EntityState {
+                x: -100.0,
+                y: 0.0,
+                rotation: 0.0,
+                scale_x: 1.0,
+                scale_y: 1.0,
+                color: (0.1, 0.8, 0.3, 1.0),
+                destroy_requested: false,
+            },
         );
-    }
+        st.entity_scripts
+            .insert(player_id, "examples/groot/scripts/player.gs".to_string());
 
-    // Spawn each entity's script engine.
-    {
-        let st = bridge.borrow();
-        let entries: Vec<_> = st
-            .entity_scripts
-            .iter()
-            .map(|(&eid, path)| (eid, path.clone()))
-            .collect();
-        drop(st);
-        for (eid, path) in entries {
-            host.spawn_entity(eid, &path, Rc::clone(&bridge));
-        }
+        let enemy_id = st.spawn_id();
+        st.entity_states.insert(
+            enemy_id,
+            EntityState {
+                x: 100.0,
+                y: 0.0,
+                rotation: 0.0,
+                scale_x: 1.0,
+                scale_y: 1.0,
+                color: (0.8, 0.2, 0.8, 1.0),
+                destroy_requested: false,
+            },
+        );
+        st.entity_scripts
+            .insert(enemy_id, "examples/groot/scripts/enemy.gs".to_string());
+
+        println!("[setup] player={:?} enemy={:?}", player_id, enemy_id);
     }
 
     // ------------------------------------------------------------------
-    // Simulated game loop — 5 ticks with fake input.
+    // Game loop — 6 ticks
     // ------------------------------------------------------------------
     println!();
     println!("--- tick 1: player moves right ---");
     simulate_tick(&mut host, &bridge, 0.016, |st| {
-        st.input.keys_down.push("d".to_string());
+        st.input.keys_down.push("KeyD".to_string());
     });
 
     println!();
-    println!("--- tick 2: player moves down, enemy idles ---");
+    println!("--- tick 2: player moves down ---");
     simulate_tick(&mut host, &bridge, 0.016, |st| {
-        st.input.keys_down.push("s".to_string());
+        st.input.keys_down.push("KeyS".to_string());
     });
 
     println!();
-    println!("--- tick 3: player attacks (space) ---");
+    println!("--- tick 3: player attacks (Space) ---");
     simulate_tick(&mut host, &bridge, 0.016, |st| {
         st.input.keys_pressed.push("Space".to_string());
     });
 
     println!();
-    println!("--- tick 4: no input ---");
+    println!("--- tick 4: player moves left ---");
+    simulate_tick(&mut host, &bridge, 0.016, |st| {
+        st.input.keys_down.push("KeyA".to_string());
+    });
+
+    println!();
+    println!("--- tick 5: no input ---");
     simulate_tick(&mut host, &bridge, 0.016, |_| {});
 
     println!();
-    println!("--- tick 5: spawn a new enemy via script command ---");
-    simulate_tick(&mut host, &bridge, 0.016, |_| {});
+    println!("--- tick 6: mouse click near player ---");
+    simulate_tick(&mut host, &bridge, 0.016, |st| {
+        st.input.mouse_x = -80.0;
+        st.input.mouse_y = 10.0;
+        st.input.mouse_button_down[0] = true;
+        st.input.mouse_button_pressed[0] = true;
+    });
 
     // ------------------------------------------------------------------
-    // Print final state.
+    // Final state
     // ------------------------------------------------------------------
     println!();
-    println!("=== Final Entity Positions ===");
+    println!("=== Final Entity State ===");
     {
         let st = bridge.borrow();
-        for (eid, pos) in &st.positions {
-            println!("  entity {:?}: ({:.1}, {:.1})", eid, pos.0, pos.1);
+        for (eid, state) in &st.entity_states {
+            let default_script = String::new();
+            let script = st.entity_scripts.get(eid).unwrap_or(&default_script);
+            println!(
+                "  {:?} [{}]: pos=({:.1},{:.1}) rot={:.2} scale=({:.1},{:.1}) color=({:.2},{:.2},{:.2},{:.2})",
+                eid, script, state.x, state.y, state.rotation,
+                state.scale_x, state.scale_y,
+                state.color.0, state.color.1, state.color.2, state.color.3
+            );
         }
     }
 
@@ -107,25 +119,17 @@ fn main() {
     println!("=== Done ===");
 }
 
-/// Runs one tick: sync input -> run scripts -> process commands.
 fn simulate_tick(
     host: &mut GrootScriptHost,
     bridge: &Rc<RefCell<ScriptBridgeState>>,
     dt: f64,
     input_setup: impl FnOnce(&mut ScriptBridgeState),
 ) {
-    // 1. Set up this tick's input.
     input_setup(&mut bridge.borrow_mut());
-
-    // 2. Sync input (placeholder for future global injection).
-    plugin::system_sync_input(host, bridge);
-
-    // 3. Run all entity scripts.
-    plugin::system_run_scripts(host, bridge, dt);
-
-    // 4. Process deferred commands.
-    plugin::system_process_commands(host, bridge);
-
-    // 5. Clear per-frame input.
+    groot_plugin::system_run_scripts(host, bridge, dt);
+    groot_plugin::system_process_commands(host, bridge);
+    groot_plugin::system_apply_destroy(bridge);
+    groot_plugin::system_process_debug_draws(bridge);
+    groot_plugin::system_process_events(bridge);
     bridge.borrow_mut().input = InputState::default();
 }
