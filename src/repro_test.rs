@@ -13,6 +13,8 @@ mod flappy_full {
         vm.register_fn("groot.IsKeyDown", |_| Value::Bool(false));
         vm.register_fn("groot.Log", |_| Value::Nil);
         vm.register_fn("groot.Warn", |_| Value::Nil);
+        vm.register_fn("groot.SetSelfPosition", |_| Value::Nil);
+        vm.register_fn("groot.SetSelfCollider", |_| Value::Nil);
         vm.register_fn("groot.GetSelfPosition", |_| {
             Value::Slice(Rc::new(RefCell::new(vec![Value::Float(0.0), Value::Float(0.0)])))
         });
