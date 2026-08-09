@@ -435,7 +435,14 @@ impl VirtualMachine {
                     slots_offset,
                 });
                 self.instruction_count = 0;
-                self.run()?;
+                // A script error can abort mid-expression, leaving partial
+                // temporaries on the shared operand stack. Restore the pre-call
+                // depth so one bad frame can't pollute the stack that later
+                // calls (and their local slots) depend on.
+                if let Err(err) = self.run() {
+                    self.stack.truncate(slots_offset);
+                    return Err(err);
+                }
                 Ok(self.stack.pop().unwrap_or(Value::Nil))
             }
             _ => Err(Error::runtime(format!(
@@ -541,8 +548,19 @@ impl VirtualMachine {
                         let target = frame.slots_offset + idx;
                         if target < self.stack.len() {
                             self.stack[target] = value;
-                        } else {
+                        } else if target == self.stack.len() {
                             self.stack.push(value);
+                        } else {
+                            // The target slot is unreachable, meaning temporaries
+                            // were not cleaned up and the operand stack drifted
+                            // past the locals. Surface it instead of silently
+                            // writing to the wrong slot.
+                            return Err(Error::runtime_at(
+                                format!(
+                                    "operand stack misalignment while assigning local #{idx}"
+                                ),
+                                line_of(&frame),
+                            ));
                         }
                     }
                     OpCode::JumpIfFalse => {
@@ -580,6 +598,18 @@ impl VirtualMachine {
                         let arg_count = frame.function.code[frame.ip] as usize;
                         frame.ip += 1;
                         let callee_name = string_constant(&frame.function, idx);
+                        // Guard against operand-stack drift: the compiler must
+                        // have pushed exactly `arg_count` argument values. If the
+                        // stack is short, a previous mis-evaluation corrupted it;
+                        // surface that instead of silently popping nils.
+                        if self.stack.len() < arg_count {
+                            return Err(Error::runtime_at(
+                                format!(
+                                    "operand stack underflow: expected {arg_count} arguments for '{callee_name}'"
+                                ),
+                                line_of(&frame),
+                            ));
+                        }
                         if let Some(func) = self.host_fns.get(callee_name) {
                             let mut args = Vec::with_capacity(arg_count);
                             for _ in 0..arg_count {
@@ -676,11 +706,23 @@ impl VirtualMachine {
                         let index = self.stack.pop().unwrap_or(Value::Nil);
                         let target = self.stack.pop().unwrap_or(Value::Nil);
                         let value = match (target, index) {
-                            (Value::Slice(items), Value::Int(i)) => items
+                            (Value::Slice(items), Value::Int(i)) if i >= 0 => items
                                 .borrow()
                                 .get(i as usize)
                                 .cloned()
                                 .unwrap_or(Value::Nil),
+                            (Value::Slice(items), Value::Int(i)) => {
+                                // Negative indices would wrap to a huge `usize`
+                                // and silently read nil; reject them loudly like
+                                // Go's runtime panic for out-of-range indexes.
+                                return Err(Error::runtime_at(
+                                    format!(
+                                        "index {i} out of bounds for slice of length {}",
+                                        items.borrow().len()
+                                    ),
+                                    line_of(&frame),
+                                ));
+                            }
                             (Value::Map(map), Value::String(k)) => map
                                 .borrow()
                                 .get(&k)
@@ -735,6 +777,16 @@ impl VirtualMachine {
                         let arg_count = frame.function.code[frame.ip] as usize;
                         frame.ip += 1;
                         let method = string_constant(&frame.function, method_idx).to_string();
+                        // The receiver sits below the arguments on the stack, so
+                        // the full frame needs arg_count + 1 slots.
+                        if self.stack.len() < arg_count + 1 {
+                            return Err(Error::runtime_at(
+                                format!(
+                                    "operand stack underflow: expected receiver + {arg_count} arguments for method '{method}'"
+                                ),
+                                line_of(&frame),
+                            ));
+                        }
                         let mut args = Vec::with_capacity(arg_count);
                         for _ in 0..arg_count {
                             args.push(self.stack.pop().unwrap_or(Value::Nil));
@@ -903,6 +955,13 @@ impl VirtualMachine {
         let byte = frame.function.code[frame.ip];
         frame.ip += 1;
         byte as i8 as isize
+    }
+
+    /// Number of values currently on the shared operand stack. Test-only
+    /// introspection used to assert that errored calls restore stack depth.
+    #[cfg(test)]
+    pub(crate) fn stack_depth(&self) -> usize {
+        self.stack.len()
     }
 }
 

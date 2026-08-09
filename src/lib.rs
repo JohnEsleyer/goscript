@@ -49,6 +49,9 @@ pub mod resolver;
 pub mod value;
 pub mod vm;
 
+#[cfg(test)]
+mod repro_test;
+
 pub use compiler::Compiler;
 pub use error::Error;
 pub use function::CompiledFunction;
