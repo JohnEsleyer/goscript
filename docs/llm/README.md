@@ -87,7 +87,7 @@ Expr::MethodCall { receiver, method, args } => {
 - `goscript` uses `Rc` and `RefCell` for single-threaded performance. These types are **not `Send`/`Sync`**.
 - Bevy's `Resource`/`ResMut` requires `Send + Sync`. Use **`NonSendMut<T>`** and `insert_non_send_resource()` instead.
 - `GrootScriptHost` does NOT derive `Resource`.
-- Position crosses the VM↔Bevy boundary via a `static Mutex<(f32, f32)>` (native bindings can't borrow the Bevy world).
+- State crosses the VM↔Bevy boundary via `static Mutex<...>` (native bindings can't borrow the Bevy world).
 
 ---
 
@@ -125,7 +125,26 @@ Expr::MethodCall { receiver, method, args } => {
 
 ---
 
-## 7. New Features (v0.2+)
+## 7. API Surface (v0.2+)
+
+### Host function registration
+- `vm.register_fn("groot.Log", |args| { ... })` — closures captured via `Rc<dyn Fn>`.
+- Dotted names auto-declare packages via `declare_package`.
+- Functions receive `Vec<Value>` and return `Value`.
+
+### Standard library (built-in, no imports needed)
+- `math.Sqrt`, `math.Sin`, `math.Cos`, `math.Abs`, `math.Floor`, `math.Ceil`, `math.Round`, `math.Atan2`, `math.Pow`
+- `fmt.Sprintf` — printf-style formatting (`%d`, `%f`, `%s`, `%v`, `%%`)
+- `rand.Float`, `rand.Intn(max)`
+- `time.Delta` — returns frame delta time
+- `strings.Contains`, `strings.ToLower`, `strings.ToUpper`, `strings.HasPrefix`, `strings.HasSuffix`, `strings.Trim`, `strings.Replace`, `strings.Split`, `strings.Join`
+
+### GoScript language features
+- Structs with receiver methods: `type Foo struct { ... }`, `func (f *Foo) Bar() { ... }`
+- Import system: `import "path/to/module.gs"` then `module.Func()`
+- Range loops: `for i := 0; i < 10; i++ { ... }`, `for i, v := range slice { ... }`
+- Type casts: `int(x)`, `float64(x)`, `string(x)`, `bool(x)`
+- Hot-reload: globals survive code recompilation on file save
 
 ### CallMethod host support
 - `OpCode::CallMethod` checks `host_fns["TypeName.Method"]` before `globals`.
@@ -137,17 +156,37 @@ Expr::MethodCall { receiver, method, args } => {
 - `reload_if_changed()` checks mtime of both the main script and all deps.
 - Live global values are preserved across reloads.
 
-### Standard library: strings package
-- `strings.Contains(s, substr)`, `strings.ToLower(s)`, `strings.ToUpper(s)`
-- `strings.HasPrefix(s, prefix)`, `strings.HasSuffix(s, suffix)`
-- `strings.Trim(s, chars)`, `strings.Replace(s, old, new, n)`, `strings.Split(s, delim)`, `strings.Join(slice, sep)`
+---
 
-### Standard library: math extensions
-- `math.Floor(x)`, `math.Ceil(x)`, `math.Round(x)`
-- `math.Atan2(y, x)`, `math.Pow(base, exp)`
+## 8. Standalone Example (examples/groot)
 
-### Multi-entity architecture (examples/groot)
-- `ScriptBridgeState` — shared world state (positions, input, command queue).
-- `GrootScriptHost` — per-entity `HotReloadEngine` instances.
-- `EngineCommand` — deferred commands: `SpawnEntity`, `DestroyEntity`, `SetPosition`, `PlaySound`.
-- Systems: `system_sync_input`, `system_run_scripts`, `system_process_commands`.
+The `examples/groot/` directory demonstrates the hybrid architecture without Bevy:
+
+### Architecture
+- `bridge.rs` — `ScriptBridgeState` (shared world: positions, input, commands, debug draws, events, entity states), `GrootScriptHost` (engines keyed by script path), `EntityState` (per-entity position/rotation/scale/color).
+- `groot_module.rs` — `GrootModuleExt` trait: stateless `groot.*` utilities (math, collision, logging).
+- `groot_plugin.rs` — `register_entity_api()`: entity context dispatch (`CURRENT_ENTITY` thread-local), self-context APIs, input, queries, debug gizmos, commands, event bus. System functions for the tick loop.
+- `main.rs` — Simulated game loop with 6 ticks, multi-entity setup.
+
+### Script patterns
+```go
+// Component struct + receiver method
+type Player struct { Speed float64; Hp int }
+var player = Player{Speed: 350.0, Hp: 100}
+
+func OnUpdate(dt float64) {
+    var pos = groot.GetSelfPosition()
+    var newX = groot.Clamp(pos[0] + groot.GetAxis("Horizontal") * player.Speed * dt, -580.0, 580.0)
+    groot.SetSelfPosition(newX, pos[1])
+
+    var dist = groot.GetDistance(groot.GetSelfEntity(), 2)
+    if dist < 120.0 { groot.EmitEvent("EnemyAlert", dist) }
+
+    groot.DrawDebugCircle(newX, pos[1], 35.0, 0.2, 1.0, 0.5)
+}
+
+func (p *Player) TakeDamage(amount int) {
+    p.Hp -= amount
+    if p.Hp <= 0 { groot.DestroySelf() }
+}
+```
