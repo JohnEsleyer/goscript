@@ -1,4 +1,4 @@
-// npc.gs — Stationary NPC with event listening and color pulsing
+// npc.go — Stationary NPC with event listening and color pulsing
 
 type NPC struct {
     Dialog     string

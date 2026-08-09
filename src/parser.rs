@@ -139,7 +139,7 @@ impl Parser {
         }
     }
 
-    /// `import "path/file.gs"` or `import ("a.gs" "b.gs")`. Grouped imports
+    /// `import "path/file.go"` or `import ("a.go" "b.go")`. Grouped imports
     /// return one `Stmt::Import` per path.
     fn parse_import(&mut self) -> Result<Vec<Stmt>, Error> {
         let line = self.cur_line();

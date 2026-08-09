@@ -1,4 +1,4 @@
-// utils/math_helpers.gs — shared utility functions
+// utils/math_helpers.go — shared utility functions
 func Lerp(a float64, b float64, t float64) float64 {
     return a + (b - a) * t
 }

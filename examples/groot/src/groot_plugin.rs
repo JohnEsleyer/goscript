@@ -364,7 +364,7 @@ pub fn system_run_scripts(
     for (eid, script_path) in entities {
         let engine = host.ensure_engine_loaded(&script_path, Rc::clone(bridge));
 
-        // Hot-reload: recompile if the .gs file changed on disk.
+        // Hot-reload: recompile if the .go file changed on disk.
         match engine.reload_if_changed() {
             Ok(true) => {
                 println!("[groot] script reloaded: {}", script_path);

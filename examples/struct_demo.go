@@ -1,7 +1,7 @@
-// struct_demo.gs --- structs, shared references, and for loops
+// struct_demo.go --- structs, shared references, and for loops
 // Thin slices use shared references (rc/RefCell), so two variables can
 // alias the same struct and mutations show through both.
-// Run it with:  cargo run -- examples/struct_demo.gs
+// Run it with:  cargo run -- examples/struct_demo.go
 
 type Transform struct {
     X float64

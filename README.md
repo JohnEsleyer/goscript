@@ -8,7 +8,7 @@ GC pauses, background goroutines, large binaries, and a painful FFI story. GoScr
 keeps the look and feel of Go and throws the runtime away.
 
 ```go
-// player.gs — the syntax you already know and love
+// player.go — the syntax you already know and love
 var hp = 100
 var speed = 12.5
 
@@ -34,20 +34,21 @@ func TakeDamage(amount int) {
 | Go runtime background threads | Nothing runs on its own — the engine drives execution tick by tick. |
 | Huge binaries + CGO wrapper pain | A pure-Rust VM, compiled directly into your game. |
 | Go's static compiler | A tiny `lexer → parser → bytecode compiler → stack VM`. |
+| Custom IDE extensions required | Standard `.go` extension allows instant IDE support (VS Code, GoLand, Vim) out of the box! |
 
 ### Principle
 
 > *Your game engine lives mainly in Rust but you want your content team
 > to write gameplay scripts without learning Rust. They already know Go. So let
-> them write Go — the syntax — and let the engine own the runtime.*
+> them write Go — the syntax and `.go` file extension — and let the engine own the runtime.*
 
 ## Features
 
 Fast, dependency-free core:
 
-- **Go-flavored syntax** — `var`, `func`, `if`/`else`, `for`, `type struct`,
+- **Go-flavored syntax & standard `.go` files** — `var`, `func`, `if`/`else`, `for`, `type struct`,
   typed parameters and `:=` short declarations, `//` and `/* */` comments,
-  automatic semicolon insertion (ASI) so semicolons are optional.
+  automatic semicolon insertion (ASI) so semicolons are optional. Standard `.go` extension enables instant IDE syntax highlighting.
 - **Dynamically typed values** (optional type annotations accepted and ignored) —
   `nil`, `int` (i64), `float` (f64), `string`, `bool`.
 - **Structs** — `type Player struct { hp int }`, struct literals
@@ -56,10 +57,10 @@ Fast, dependency-free core:
 - **Bytecode VM** — the front end emits a chunk-based instruction set (mirrors
   Lua's design), executed by a fast stack VM with global + local slots.
 - **Functions & recursion** with `return`, `break`, `continue`.
-- **Hot reloading** — recompile `.gs` files on change while preserving live
+- **Hot reloading** — recompile `.go` files on change while preserving live
   global state across reloads.
 - **Native standard library** — Go's heavy stdlib (`net`, `os`, `exec`, `db`) is
-  left out on purpose; a tiny game-focused `math`, `fmt`, `rand`, `time` is
+  left out on purpose; a tiny game-focused `math`, `fmt`, `rand`, `time`, `strings` is
   registered as compiled-in Rust functions and called with zero script
   overhead. Sandboxed by construction: no filesystem, network, or process API.
 - **Host bindings** — `register_fn` exposes Rust functions to scripts.
@@ -72,9 +73,9 @@ Fast, dependency-free core:
 ```bash
 cargo build
 cargo run                              # hot-reload + stdlib frame-tick demo
-cargo run -- examples/player.gs           # run a standalone script file
-cargo run -- examples/struct_demo.gs
-cargo run -- examples/stdlib_demo.gs
+cargo run -- examples/player.go        # run a standalone script file
+cargo run -- examples/struct_demo.go
+cargo run -- examples/stdlib_demo.go
 cargo test
 ```
 
@@ -106,7 +107,7 @@ let hp = vm.call("TakeDamage", vec![Value::Int(35)])?;  // Value::Int(65)
 Hot reloading, from a host that owns the script file:
 
 ```rust
-let mut engine = HotReloadEngine::new("content/player.gs");
+let mut engine = HotReloadEngine::new("content/player.go");
 // every tick, cheaply:
 let changed = engine.reload_if_changed()?;  // recompiles only when the file changes
 engine.vm.call("OnUpdate", vec![Value::Float(dt)])?;
@@ -166,19 +167,10 @@ vm.set_delta_time(0.016);             // feed frame dt to time.Delta()
 | Host bridge | `register_fn(name, fn(Vec<Value>) -> Value)` |
 | Hot reload | `HotReloadEngine::reload_if_changed()` preserves live globals |
 
-## Intent
-
-GoScript is **not** a Go-compatible compiler or a general-purpose language. It
-is a purpose-built *game-dev scripting dialect*: the syntax ergonomics of Go,
-stripped of anything that gets in the way of embedding — no goroutines, no
-channels, no `panic`/`defer`, no interfaces, no GC, no standard library. Scripts
-are data: plain text that the engine compiles, loads, calls, and hot-reloads
-within a tick of the main loop.
-
 ## Roadmap
 
 Done: bytecode VM, structs (reference semantics), hot reloading, native
-standard library (`math`, `fmt`, `rand`, `time`).
+standard library (`math`, `fmt`, `rand`, `time`, `strings`).
 
 ### Todo
 
@@ -190,7 +182,7 @@ standard library (`math`, `fmt`, `rand`, `time`).
 - [x] `GrootModuleExt` rewrite — bridge-based `Input`, `Entity`, `Position`, `Spawn`, `Destroy` APIs
 - [x] `groot_plugin.rs` rewrite — sync-input, process-commands, run-scripts systems
 - [x] Scene setup in `main.rs` — multi-entity demo with player, enemy, NPC, camera
-- [x] Script assets — `player.gs`, `enemy.gs`, `npc.gs`, `utils/math_helpers.gs`
+- [x] Script assets — `player.go`, `enemy.go`, `npc.go`, `utils/math_helpers.go`
 
 Still planned:
 

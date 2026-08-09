@@ -1,4 +1,4 @@
-// utils/math_helpers.gs --- a module imported by imports_demo.gs
+// utils/math_helpers.go --- a module imported by imports_demo.go
 // Top-level functions/vars are namespaced under `math_helpers.` on import.
 
 func Lerp(a float64, b float64, t float64) float64 {

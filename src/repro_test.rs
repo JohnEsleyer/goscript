@@ -24,7 +24,7 @@ mod flappy_full {
 
     #[test]
     fn real_flappy_script_many_frames() {
-        let src = std::fs::read_to_string("../../012-groot/groot/assets/scripts/flappy.gs").unwrap();
+        let src = std::fs::read_to_string("../../012-groot/groot/assets/scripts/flappy.go").unwrap();
         let mut vm = setup();
         let chunk = vm.compile(&src).unwrap();
         vm.execute(chunk).unwrap();

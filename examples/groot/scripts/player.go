@@ -1,4 +1,4 @@
-// player.gs — Hybrid Component-Behavior Player Script
+// player.go — Hybrid Component-Behavior Player Script
 // Demonstrates: struct state, receiver methods, self-context, entity queries,
 // event emitting, collision detection, and debug gizmo drawing.
 
@@ -62,7 +62,7 @@ func OnUpdate(dt float64) {
     if groot.IsKeyPressed("Space") {
         groot.Log("Spacebar pressed — spawning particle!")
         groot.PlaySound("assets/sounds/jump.wav")
-        groot.SpawnEntity("effects/jump.gs", newX, newY - 30.0)
+        groot.SpawnEntity("effects/jump.go", newX, newY - 30.0)
     }
 
     groot.Log(fmt.Sprintf("player pos=(%.1f,%.1f) hp=%d dist=%.1f",

@@ -1,10 +1,10 @@
-// imports_demo.gs --- GoScript local import & module namespacing
-// Run it from the repo root with:  cargo run -- examples/imports_demo.gs
+// imports_demo.go --- GoScript local import & module namespacing
+// Run it from the repo root with:  cargo run -- examples/imports_demo.go
 //
 // Import paths are resolved by the host's ScriptResolver (DiskScriptResolver
 // reads them relative to the current working directory).
 
-import "examples/utils/math_helpers.gs"
+import "examples/utils/math_helpers.go"
 
 var progress = 0.5
 

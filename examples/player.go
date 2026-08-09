@@ -1,5 +1,5 @@
-// player.gs --- a GoScript game-object demonstration
-// Run it with:  cargo run -- examples/player.gs
+// player.go --- a GoScript game-object demonstration
+// Run it with:  cargo run -- examples/player.go
 
 var name = "Player"
 var hp = 100

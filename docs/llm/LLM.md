@@ -32,9 +32,11 @@ Designed specifically for game engines:
   execution only occurs when explicitly called frame-by-frame by the host engine.
 - Zero Heavy Dependencies: Pure Rust, tiny footprint, sandbox-safe by construction.
 - Hot Reloading: Live state (global variables) persists across recompilations.
+- Standard `.go` Extensions: Developers write scripts in `.go` files, enabling 
+  immediate syntax highlighting and IDE tooling out of the box.
 
 Pipeline Architecture:
-  Source Code (.gs) 
+  Source Code (.go) 
     --> Lexer (Tokens) 
     --> Parser (AST) 
     --> Resolver (Imports & Package Qualification) 
@@ -212,17 +214,17 @@ Package `strings`:
 ================================================================================
 
 Syntax:
-  import "utils/math_helpers.gs"
+  import "utils/math_helpers.go"
   import (
-      "a.gs"
-      "b.gs"
+      "a.go"
+      "b.go"
   )
 
 Resolution Mechanics (`goscript::resolver`):
 1. Import paths are resolved using a `ScriptResolver` implementation (e.g., `DiskScriptResolver`
    or `MemoryScriptResolver`).
 2. Module Namespacing: Top-level functions and variables in an imported file are automatically 
-   namespaced under the file's stem name (`"utils/math_helpers.gs"` -> `math_helpers`).
+   namespaced under the file's stem name (`"utils/math_helpers.go"` -> `math_helpers`).
 3. Self-Qualification: Internal references within the imported module to its own top-level symbols 
    are rewritten during resolution to `module_name.symbol`.
 4. Package Registration: Imported module stems are auto-declared as packages (`declare_package("mod")`)
@@ -361,7 +363,7 @@ runtime global state.
 ```rust
 use goscript::hot_reload::HotReloadEngine;
 
-let mut engine = HotReloadEngine::new("scripts/player.gs");
+let mut engine = HotReloadEngine::new("scripts/player.go");
 
 // On main thread frame tick:
 if engine.reload_if_changed()? {

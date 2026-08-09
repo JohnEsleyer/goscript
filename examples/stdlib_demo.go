@@ -1,5 +1,5 @@
-// stdlib_demo.gs --- GoScript v3 native standard library (math, fmt, rand, time)
-// Run it with:  cargo run -- examples/stdlib_demo.gs
+// stdlib_demo.go --- GoScript v3 native standard library (math, fmt, rand, time)
+// Run it with:  cargo run -- examples/stdlib_demo.go
 
 type Vector2 struct {
     X float64

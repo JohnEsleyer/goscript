@@ -10,6 +10,7 @@ Technical notes, gotchas, and conventions for LLMs working on this codebase.
 - **`register_fn` holds closures, not function pointers.** Use `Rc<dyn Fn>` (not bare `fn` pointers) so host engines can register capturing closures (e.g. keyboard state per frame).
 - **`pub use` in `lib.rs` does NOT auto-create public modules.** You must also add `pub mod foo;` before `pub use foo::FooItem;`.
 - **This crate is a library + binary.** The binary (`main.rs`) is a demo; the library (`lib.rs`) is what hosts (groot/Bevy) embed.
+- **Scripts use `.go` extensions.** Using `.go` files provides native IDE syntax highlighting and tooling without custom extensions.
 
 ---
 
@@ -108,7 +109,7 @@ Expr::MethodCall { receiver, method, args } => {
 
 ### What to watch out for
 - `declare_package` modifies a process-wide static (`OnceLock<Mutex<HashSet>>`). This persists across tests — keep module names unique in tests.
-- Import paths in `MemoryScriptResolver` are matched exactly (no normalization). `"utils/a.gs"` and `"utils//a.gs"` are different keys.
+- Import paths in `MemoryScriptResolver` are matched exactly (no normalization). `"utils/a.go"` and `"utils//a.go"` are different keys.
 - The `Stmt::Import` variant must be added to EVERY exhaustive match on `Stmt` — including `compiler.rs`, `resolver.rs`, and any new rewrite functions.
 
 ---
@@ -141,7 +142,7 @@ Expr::MethodCall { receiver, method, args } => {
 
 ### GoScript language features
 - Structs with receiver methods: `type Foo struct { ... }`, `func (f *Foo) Bar() { ... }`
-- Import system: `import "path/to/module.gs"` then `module.Func()`
+- Import system: `import "path/to/module.go"` then `module.Func()`
 - Range loops: `for i := 0; i < 10; i++ { ... }`, `for i, v := range slice { ... }`
 - Type casts: `int(x)`, `float64(x)`, `string(x)`, `bool(x)`
 - Hot-reload: globals survive code recompilation on file save

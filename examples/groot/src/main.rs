@@ -35,7 +35,7 @@ fn main() {
             },
         );
         st.entity_scripts
-            .insert(player_id, "examples/groot/scripts/player.gs".to_string());
+            .insert(player_id, "examples/groot/scripts/player.go".to_string());
 
         let enemy_id = st.spawn_id();
         st.entity_states.insert(
@@ -51,7 +51,7 @@ fn main() {
             },
         );
         st.entity_scripts
-            .insert(enemy_id, "examples/groot/scripts/enemy.gs".to_string());
+            .insert(enemy_id, "examples/groot/scripts/enemy.go".to_string());
 
         println!("[setup] player={:?} enemy={:?}", player_id, enemy_id);
     }
