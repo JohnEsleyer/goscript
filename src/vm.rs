@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,24 +23,22 @@ use crate::value::{StructInstance, Value};
 static START_TIME: OnceLock<Instant> = OnceLock::new();
 static DELTA_TIME: AtomicU64 = AtomicU64::new(0); // f64::to_bits
 
-static RAND_STATE: AtomicU64 = AtomicU64::new(0);
-
 /// Range-random float in [0.0, 1.0). A tiny xorshift64* for scripts; fast and
 /// dependency-free, not cryptographically random.
-fn rand_f64() -> f64 {
-    let mut state = RAND_STATE.load(Ordering::Relaxed);
-    if state == 0 {
+fn rand_f64(state: &Cell<u64>) -> f64 {
+    if state.get() == 0 {
         let seed = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0x9E37_79B9_7F4A_7C15);
-        state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        state.set(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
     }
-    state ^= state >> 12;
-    state ^= state << 25;
-    state ^= state >> 27;
-    RAND_STATE.store(state, Ordering::Relaxed);
-    (state >> 11) as f64 / (1u64 << 53) as f64
+    let mut s = state.get();
+    s ^= s >> 12;
+    s ^= s << 25;
+    s ^= s >> 27;
+    state.set(s);
+    (s >> 11) as f64 / (1u64 << 53) as f64
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -71,6 +69,10 @@ pub struct VirtualMachine {
     /// error instead of hanging the host engine. `None` disables the limit.
     max_instructions: Option<u64>,
     instruction_count: u64,
+    /// Per-VM xorshift64* random state (was process-wide static).
+    /// Uses `Rc<Cell>` so closures can capture it without borrow conflicts
+    /// with `host_fns` (interior mutability, no `&mut self` needed).
+    rand_state: Rc<Cell<u64>>,
     /// Supplies imported script files (`import "path/file.gs"`). Defaults to
     /// the filesystem; host engines may override with embedded/virtual files.
     pub resolver: Rc<dyn ScriptResolver>,
@@ -85,6 +87,7 @@ impl VirtualMachine {
             host_fns: HashMap::new(),
             max_instructions: Some(1_000_000),
             instruction_count: 0,
+            rand_state: Rc::new(Cell::new(0)),
             resolver: Rc::new(DiskScriptResolver),
         };
         vm.register_std_lib();
@@ -260,10 +263,13 @@ impl VirtualMachine {
         // -------------------------------------------------------------------
         // rand
         // -------------------------------------------------------------------
-        self.register_fn("rand.Float", |_| Value::Float(rand_f64()));
-
-        self.register_fn("rand.Intn", |args| match args.first() {
-            Some(Value::Int(max)) if *max > 0 => Value::Int((rand_f64() * *max as f64) as i64),
+        let rand = Rc::clone(&self.rand_state);
+        self.register_fn("rand.Float", move |_| Value::Float(rand_f64(&rand)));
+        let rand = Rc::clone(&self.rand_state);
+        self.register_fn("rand.Intn", move |args| match args.first() {
+            Some(Value::Int(max)) if *max > 0 => {
+                Value::Int((rand_f64(&rand) * *max as f64) as i64)
+            }
             _ => Value::Int(0),
         });
 
@@ -855,10 +861,13 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::String(x), Value::String(y)) => x == y,
         (Value::Int(x), Value::Int(y)) => x == y,
         (Value::Float(x), Value::Float(y)) => x == y,
+        // Cross-numeric: coerce to f64 for comparison.
         (Value::Int(_), Value::Float(_)) | (Value::Float(_), Value::Int(_)) => {
             a.as_number() == b.as_number()
         }
-        _ => false,
+        // Struct/Slice/Map: defer to Value::eq which uses Rc::ptr_eq (reference
+        // equality for aliased structs) and structural equality for collections.
+        _ => a == b,
     }
 }
 

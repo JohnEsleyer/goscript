@@ -647,6 +647,16 @@ impl Parser {
             | Some(TokenKind::MinusAssign)
             | Some(TokenKind::StarAssign)
             | Some(TokenKind::SlashAssign) => {
+                // Reject compound assignment on method calls — the receiver would
+                // be evaluated twice, duplicating side effects.
+                if let Expr::MethodCall { .. } = &expr {
+                    let tok = self.peek().cloned().unwrap();
+                    return Err(Error::new(
+                        "compound assignment target cannot be a method call (receiver would be evaluated twice)",
+                        tok.line,
+                        tok.col,
+                    ));
+                }
                 let op = match self.cur_kind().unwrap() {
                     TokenKind::PlusAssign => BinaryOp::Add,
                     TokenKind::MinusAssign => BinaryOp::Sub,
@@ -659,6 +669,15 @@ impl Parser {
             }
             // `x++` / `x--` are sugar for `x = x + 1` / `x = x - 1`.
             Some(TokenKind::PlusPlus) | Some(TokenKind::MinusMinus) => {
+                // Reject `++` / `--` on method calls — receiver evaluated twice.
+                if let Expr::MethodCall { .. } = &expr {
+                    let tok = self.peek().cloned().unwrap();
+                    return Err(Error::new(
+                        "increment/decrement target cannot be a method call",
+                        tok.line,
+                        tok.col,
+                    ));
+                }
                 let op = if matches!(self.cur_kind(), Some(TokenKind::PlusPlus)) {
                     BinaryOp::Add
                 } else {

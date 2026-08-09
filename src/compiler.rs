@@ -58,14 +58,27 @@ impl Compiler {
 
     fn emit_constant(&mut self, value: Value) {
         self.function.constants.push(value);
-        let idx = (self.function.constants.len() - 1) as u8;
+        let idx = self.function.constants.len() - 1;
+        if idx > u8::MAX as usize {
+            panic!(
+                "compile error: exceeded maximum limit of {} constants in one function",
+                u8::MAX
+            );
+        }
         self.emit_op(OpCode::Constant);
-        self.emit_byte(idx);
+        self.emit_byte(idx as u8);
     }
 
     fn name_constant(&mut self, name: &str) -> u8 {
         self.function.constants.push(Value::String(name.to_string()));
-        (self.function.constants.len() - 1) as u8
+        let idx = self.function.constants.len() - 1;
+        if idx > u8::MAX as usize {
+            panic!(
+                "compile error: exceeded maximum limit of {} constants in one function",
+                u8::MAX
+            );
+        }
+        idx as u8
     }
 
     fn emit_jump_placeholder(&mut self, op: OpCode) -> usize {
