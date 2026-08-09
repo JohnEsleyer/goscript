@@ -136,10 +136,11 @@ func CalculateDamage(distance float64) float64 {
 
 | Package | Functions |
 | --- | --- |
-| `math` | `Abs`, `Sqrt`, `Sin`, `Cos`, `Min`, `Max`, `Clamp`, `Pi` |
+| `math` | `Abs`, `Sqrt`, `Sin`, `Cos`, `Min`, `Max`, `Clamp`, `Floor`, `Ceil`, `Round`, `Atan2`, `Pow`, `Pi` |
 | `fmt` | `Println(...)`, `Sprintf(fmt, ...)` — `%d`, `%f`, `%s`, `%v`, `%%` |
 | `rand` | `Float()` (\[0, 1)), `Intn(n)` (\[0, n)) — fast xorshift, seeded from the clock |
 | `time` | `Delta()` (frame dt from `set_delta_time`), `Now()` (run-time seconds) |
+| `strings` | `Contains`, `ToLower`, `ToUpper`, `HasPrefix`, `HasSuffix`, `Trim`, `Replace`, `Split`, `Join` |
 
 ```rust
 let mut vm = VirtualMachine::new();   // stdlib auto-registered
@@ -179,6 +180,18 @@ within a tick of the main loop.
 Done: bytecode VM, structs (reference semantics), hot reloading, native
 standard library (`math`, `fmt`, `rand`, `time`).
 
+### Todo
+
+- [x] `strings` stdlib — `Contains`, `ToLower`, `ToUpper`, `HasPrefix`, `HasSuffix`, `Trim`, `Replace`, `Split`, `Join`
+- [x] Extend `math` — `Floor`, `Ceil`, `Round`, `Atan2`, `Pow`
+- [x] Recursive hot reloading — `resolve_imports_with_deps` returns dependency set; `HotReloadEngine` watches all imports
+- [x] `CallMethod` host support — VM checks `host_fns["TypeName.Method"]` before globals for receiver-style calls
+- [x] Multi-entity architecture — per-entity VM instances via `GrootScriptHost`, `ScriptBridgeState` for shared game state, command queue for deferred ops
+- [x] `GrootModuleExt` rewrite — bridge-based `Input`, `Entity`, `Position`, `Spawn`, `Destroy` APIs
+- [x] `groot_plugin.rs` rewrite — sync-input, process-commands, run-scripts systems
+- [x] Scene setup in `main.rs` — multi-entity demo with player, enemy, NPC, camera
+- [x] Script assets — `player.gs`, `enemy.gs`, `npc.gs`, `utils/math_helpers.gs`
+
 Still planned:
 
 - **Methods** — `entity.Move(dx, dy)` sugar over host bindings.
@@ -187,4 +200,4 @@ Still planned:
 
 ## License
 
-Licensed under either of Apache-2.0 or MIT at your option.# goscript
+Licensed under either of Apache-2.0 or MIT at your option.

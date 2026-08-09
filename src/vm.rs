@@ -216,6 +216,34 @@ impl VirtualMachine {
             }
         });
 
+        self.register_fn("math.Floor", |args| {
+            num0(&args).map(|x| Value::Float(x.floor())).unwrap_or(Value::Nil)
+        });
+
+        self.register_fn("math.Ceil", |args| {
+            num0(&args).map(|x| Value::Float(x.ceil())).unwrap_or(Value::Nil)
+        });
+
+        self.register_fn("math.Round", |args| {
+            num0(&args).map(|x| Value::Float(x.round())).unwrap_or(Value::Nil)
+        });
+
+        self.register_fn("math.Atan2", |args| match (args.get(0), args.get(1)) {
+            (Some(a), Some(b)) => match (a.as_number(), b.as_number()) {
+                (Some(y), Some(x)) => Value::Float(y.atan2(x)),
+                _ => Value::Nil,
+            },
+            _ => Value::Nil,
+        });
+
+        self.register_fn("math.Pow", |args| match (args.get(0), args.get(1)) {
+            (Some(a), Some(b)) => match (a.as_number(), b.as_number()) {
+                (Some(base), Some(exp)) => Value::Float(base.powf(exp)),
+                _ => Value::Nil,
+            },
+            _ => Value::Nil,
+        });
+
         // -------------------------------------------------------------------
         // fmt
         // -------------------------------------------------------------------
@@ -271,6 +299,72 @@ impl VirtualMachine {
                 Value::Int((rand_f64(&rand) * *max as f64) as i64)
             }
             _ => Value::Int(0),
+        });
+
+        // -------------------------------------------------------------------
+        // strings
+        // -------------------------------------------------------------------
+        self.register_fn("strings.Contains", |args| match (args.get(0), args.get(1)) {
+            (Some(Value::String(s)), Some(Value::String(sub))) => Value::Bool(s.contains(sub.as_str())),
+            _ => Value::Bool(false),
+        });
+
+        self.register_fn("strings.ToLower", |args| match args.first() {
+            Some(Value::String(s)) => Value::String(s.to_lowercase()),
+            _ => Value::Nil,
+        });
+
+        self.register_fn("strings.ToUpper", |args| match args.first() {
+            Some(Value::String(s)) => Value::String(s.to_uppercase()),
+            _ => Value::Nil,
+        });
+
+        self.register_fn("strings.HasPrefix", |args| match (args.get(0), args.get(1)) {
+            (Some(Value::String(s)), Some(Value::String(prefix))) => Value::Bool(s.starts_with(prefix.as_str())),
+            _ => Value::Bool(false),
+        });
+
+        self.register_fn("strings.HasSuffix", |args| match (args.get(0), args.get(1)) {
+            (Some(Value::String(s)), Some(Value::String(suffix))) => Value::Bool(s.ends_with(suffix.as_str())),
+            _ => Value::Bool(false),
+        });
+
+        self.register_fn("strings.Trim", |args| match (args.get(0), args.get(1)) {
+            (Some(Value::String(s)), Some(Value::String(chars))) => {
+                Value::String(s.trim_matches(|c| chars.contains(c)).to_string())
+            }
+            (Some(Value::String(s)), None) => Value::String(s.trim().to_string()),
+            _ => Value::Nil,
+        });
+
+        self.register_fn("strings.Replace", |args| {
+            match (args.get(0), args.get(1), args.get(2), args.get(3)) {
+                (Some(Value::String(s)), Some(Value::String(from)), Some(Value::String(to)), Some(Value::Int(n))) => {
+                    Value::String(s.replacen(from.as_str(), to.as_str(), *n as usize))
+                }
+                (Some(Value::String(s)), Some(Value::String(from)), Some(Value::String(to)), _) => {
+                    Value::String(s.replace(from.as_str(), to.as_str()))
+                }
+                _ => Value::Nil,
+            }
+        });
+
+        self.register_fn("strings.Split", |args| match (args.get(0), args.get(1)) {
+            (Some(Value::String(s)), Some(Value::String(delim))) => {
+                let parts: Vec<Value> = s.split(delim.as_str())
+                    .map(|p| Value::String(p.to_string()))
+                    .collect();
+                Value::Slice(Rc::new(RefCell::new(parts)))
+            }
+            _ => Value::Nil,
+        });
+
+        self.register_fn("strings.Join", |args| match (args.get(0), args.get(1)) {
+            (Some(Value::Slice(items)), Some(Value::String(sep))) => {
+                let strs: Vec<String> = items.borrow().iter().map(|v| v.to_string()).collect();
+                Value::String(strs.join(sep))
+            }
+            _ => Value::Nil,
         });
 
         // -------------------------------------------------------------------
@@ -661,6 +755,15 @@ impl VirtualMachine {
                         // Methods are registered as `<TypeName>.<Method>` globals
                         // with the receiver bound as their first parameter.
                         let fn_name = format!("{type_name}.{method}");
+                        // Check host_fns first (Rust-native receiver methods),
+                        // then fall back to script-defined globals.
+                        if let Some(func) = self.host_fns.get(&fn_name) {
+                            let mut call_args = vec![receiver];
+                            call_args.extend(args);
+                            let result = native_call(func, call_args);
+                            self.stack.push(result);
+                            continue;
+                        }
                         match self.globals.get(&fn_name).cloned() {
                             Some(Value::Function(function)) => {
                                 let slots_offset = self.stack.len();

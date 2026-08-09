@@ -1,0 +1,8 @@
+[package]
+name = "groot"
+version = "0.1.0"
+edition = "2021"
+description = "GoScript multi-entity runtime demo — a tiny ECS driving per-entity hot-reloaded scripts"
+
+[dependencies]
+goscript = { path = "../../" }

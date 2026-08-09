@@ -68,6 +68,13 @@ impl Value {
             _ => None,
         }
     }
+
+    pub fn as_string(&self) -> Option<&str> {
+        match self {
+            Value::String(s) => Some(s),
+            _ => None,
+        }
+    }
 }
 
 fn format_float(x: f64) -> String {

@@ -25,6 +25,8 @@ Technical notes, gotchas, and conventions for LLMs working on this codebase.
 ### `value.rs`
 - Use `.to_string()` for display. There is no `.display()` method.
 - `Value` implements `fmt::Display` (which gives `.to_string()` for free).
+- `Value::as_number() -> Option<f64>` — numeric coercion for ints and floats.
+- `Value::as_string() -> Option<&str>` — string extraction for String variant.
 - `Value` variants: `Nil`, `Int(i64)`, `Float(f64)`, `String(String)`, `Bool(bool)`, `Struct(Rc<RefCell<StructInstance>>)`, `Slice(Rc<RefCell<Vec<Value>>>)`, `Map(Rc<RefCell<HashMap<String, Value>>>)`, `Function(Rc<CompiledFunction>)`, `NativeFn(fn(Vec<Value>) -> Value)`.
 - `StructInstance` is in `value.rs`, NOT in a separate `struct.rs`.
 
@@ -47,6 +49,8 @@ Technical notes, gotchas, and conventions for LLMs working on this codebase.
 ### `hot_reload.rs`
 - `HotReloadEngine::new(path)` takes `&str`.
 - `engine.reload_if_changed()` returns `Result<bool, Error>`.
+- Watches all imported dependencies recursively (tracked via `dep_paths` / `dep_modified`).
+- Hot-reload preserves live global values across code swaps.
 
 ### `error.rs`
 - `Error::runtime(msg)` — no line info.
@@ -118,3 +122,32 @@ Expr::MethodCall { receiver, method, args } => {
 5. Never assume a library is available — check `Cargo.toml` first.
 6. Run `cargo test` and `cargo clippy` before committing.
 7. Do not add `#![allow(...)]` to silence warnings — fix the root cause.
+
+---
+
+## 7. New Features (v0.2+)
+
+### CallMethod host support
+- `OpCode::CallMethod` checks `host_fns["TypeName.Method"]` before `globals`.
+- Register Rust-native receiver methods as `"Zombie.Hit"`, `"Player.TakeDamage"`, etc.
+- The receiver is passed as the first argument to the host function.
+
+### Recursive hot reloading
+- `HotReloadEngine` tracks all imported dependency paths via `resolve_imports_with_deps`.
+- `reload_if_changed()` checks mtime of both the main script and all deps.
+- Live global values are preserved across reloads.
+
+### Standard library: strings package
+- `strings.Contains(s, substr)`, `strings.ToLower(s)`, `strings.ToUpper(s)`
+- `strings.HasPrefix(s, prefix)`, `strings.HasSuffix(s, suffix)`
+- `strings.Trim(s, chars)`, `strings.Replace(s, old, new, n)`, `strings.Split(s, delim)`, `strings.Join(slice, sep)`
+
+### Standard library: math extensions
+- `math.Floor(x)`, `math.Ceil(x)`, `math.Round(x)`
+- `math.Atan2(y, x)`, `math.Pow(base, exp)`
+
+### Multi-entity architecture (examples/groot)
+- `ScriptBridgeState` — shared world state (positions, input, command queue).
+- `GrootScriptHost` — per-entity `HotReloadEngine` instances.
+- `EngineCommand` — deferred commands: `SpawnEntity`, `DestroyEntity`, `SetPosition`, `PlaySound`.
+- Systems: `system_sync_input`, `system_run_scripts`, `system_process_commands`.

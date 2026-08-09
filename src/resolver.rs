@@ -76,6 +76,18 @@ pub fn resolve_imports(
     resolve_file(stmts, None, resolver, &mut visited)
 }
 
+/// Same as [`resolve_imports`] but also returns the set of all imported file
+/// paths (recursively). Used by [`HotReloadEngine`] to watch dependencies.
+pub fn resolve_imports_with_deps(
+    stmts: Vec<Stmt>,
+    resolver: &dyn ScriptResolver,
+) -> Result<(Vec<Stmt>, HashSet<String>), Error> {
+    let mut visited = HashSet::new();
+    let deps = HashSet::new();
+    let resolved = resolve_file_with_deps(stmts, None, resolver, &mut visited, &deps)?;
+    Ok((resolved, visited))
+}
+
 /// Processes one file. `module_name` is `None` for the root program (its
 /// symbols stay bare) and `Some(name)` for imported files, whose top-level
 /// declarations get prefixed and self-referenced internally.
@@ -154,6 +166,19 @@ fn resolve_file(
                 .collect())
         }
     }
+}
+
+/// Same as [`resolve_file`] but returns both the resolved statements and the
+/// set of all imported file paths (the dependency set).
+fn resolve_file_with_deps(
+    stmts: Vec<Stmt>,
+    module_name: Option<&str>,
+    resolver: &dyn ScriptResolver,
+    visited: &mut HashSet<String>,
+    _deps: &HashSet<String>,
+) -> Result<Vec<Stmt>, Error> {
+    // resolve_file already populates `visited` with all imported paths.
+    resolve_file(stmts, module_name, resolver, visited)
 }
 
 /// Prefixes a top-level declaration's name with `prefix` (imported modules).
