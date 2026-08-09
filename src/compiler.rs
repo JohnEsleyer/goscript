@@ -99,6 +99,9 @@ impl Compiler {
 
     fn compile_stmt(&mut self, stmt: &Stmt) {
         match stmt {
+            // Imports are resolved into the program by `resolver::resolve_imports`
+            // before compilation; nothing to emit if one slips through.
+            Stmt::Import { .. } => {}
             Stmt::VarDecl { name, init, line } => {
                 self.current_line = *line;
                 if self.scope_depth > 0 {

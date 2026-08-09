@@ -11,6 +11,7 @@ use crate::function::CompiledFunction;
 use crate::lexer::Lexer;
 use crate::opcode::OpCode;
 use crate::parser;
+use crate::resolver::{resolve_imports, DiskScriptResolver, ScriptResolver};
 use crate::value::{StructInstance, Value};
 
 // ---------------------------------------------------------------------------
@@ -70,6 +71,9 @@ pub struct VirtualMachine {
     /// error instead of hanging the host engine. `None` disables the limit.
     max_instructions: Option<u64>,
     instruction_count: u64,
+    /// Supplies imported script files (`import "path/file.gs"`). Defaults to
+    /// the filesystem; host engines may override with embedded/virtual files.
+    pub resolver: Rc<dyn ScriptResolver>,
 }
 
 impl VirtualMachine {
@@ -81,6 +85,7 @@ impl VirtualMachine {
             host_fns: HashMap::new(),
             max_instructions: Some(1_000_000),
             instruction_count: 0,
+            resolver: Rc::new(DiskScriptResolver),
         };
         vm.register_std_lib();
         vm
@@ -90,6 +95,13 @@ impl VirtualMachine {
     /// after `n` executed bytecode instructions; `None` disables the guard.
     pub fn set_max_instructions(&mut self, max_instructions: Option<u64>) {
         self.max_instructions = max_instructions;
+    }
+
+    /// Replaces the file resolver used to load `import "path"` modules. By
+    /// default scripts are read from disk; host engines can supply files from
+    /// memory or virtual archives instead.
+    pub fn set_resolver(&mut self, resolver: Rc<dyn ScriptResolver>) {
+        self.resolver = resolver;
     }
 
     /// Injects the GoScript native standard library (`math`, `fmt`, `rand`,
@@ -289,6 +301,7 @@ impl VirtualMachine {
         let mut lexer = Lexer::new(source);
         let tokens = lexer.tokenize()?;
         let ast = parser::parse(tokens)?;
+        let ast = resolve_imports(ast, self.resolver.as_ref())?;
         let compiled = Compiler::new("main").compile(&ast);
         Ok(Rc::new(compiled))
     }
@@ -877,6 +890,7 @@ impl Default for VirtualMachine {
 mod tests {
     use super::*;
     use crate::hot_reload::HotReloadEngine;
+    use crate::resolver::MemoryScriptResolver;
     use std::fs;
     use std::path::PathBuf;
 
@@ -1172,6 +1186,98 @@ func FromText() int { return int("7") }
         assert_eq!(script_returns(src, "ToStrings", vec![]), "42");
         assert_eq!(script_returns(src, "ToBools", vec![]), "1");
         assert_eq!(script_returns(src, "FromText", vec![]), "7");
+    }
+
+    #[test]
+    fn imports_resolve_modules_and_namespace() {
+        let mut files = HashMap::new();
+        files.insert(
+            "utils/math_helpers.gs".to_string(),
+            r#"
+            func Lerp(a float64, b float64, t float64) float64 {
+                return a + (b - a) * t
+            }
+            func Scale() int { return 2 }
+            "#.to_string(),
+        );
+        let mut vm = VirtualMachine::new();
+        vm.set_resolver(Rc::new(MemoryScriptResolver::new(files)));
+        let src = r#"
+        import "utils/math_helpers.gs"
+        func Use() float64 { return math_helpers.Lerp(10.0, 100.0, 0.5) }
+        func UseVar() int { return math_helpers.Scale() }
+        "#;
+        let chunk = vm.compile(src).unwrap();
+        vm.execute(chunk).unwrap();
+        assert_eq!(vm.call("Use", vec![]).unwrap().to_string(), "55");
+        assert_eq!(vm.call("UseVar", vec![]).unwrap().to_string(), "2");
+    }
+
+    #[test]
+    fn grouped_imports() {
+        let mut files = HashMap::new();
+        files.insert("a.gs".to_string(), "func Alpha() int { return 1 }\n".to_string());
+        files.insert("b.gs".to_string(), "func Beta() int { return 2 }\n".to_string());
+        let mut vm = VirtualMachine::new();
+        vm.set_resolver(Rc::new(MemoryScriptResolver::new(files)));
+        let src = r#"
+        import (
+            "a.gs"
+            "b.gs"
+        )
+        func Sum() int { return a.Alpha() + b.Beta() }
+        "#;
+        let chunk = vm.compile(src).unwrap();
+        vm.execute(chunk).unwrap();
+        assert_eq!(vm.call("Sum", vec![]).unwrap().to_string(), "3");
+    }
+
+    #[test]
+    fn imported_module_globals_and_self_references() {
+        let mut files = HashMap::new();
+        files.insert(
+            "counter.gs".to_string(),
+            "var count = 10\nfunc Bump(n int) int {\n count = count + n\n return count }\n"
+                .to_string(),
+        );
+        let mut vm = VirtualMachine::new();
+        vm.set_resolver(Rc::new(MemoryScriptResolver::new(files)));
+        let src = r#"
+        import "counter.gs"
+        func Read() int { return counter.count }
+        func Add() int { return counter.Bump(5) }
+        "#;
+        let chunk = vm.compile(src).unwrap();
+        vm.execute(chunk).unwrap();
+        assert_eq!(vm.call("Add", vec![]).unwrap().to_string(), "15");
+        assert_eq!(vm.call("Read", vec![]).unwrap().to_string(), "15");
+    }
+
+    #[test]
+    fn circular_imports_are_rejected() {
+        let mut files = HashMap::new();
+        files.insert(
+            "a.gs".to_string(),
+            "import \"b.gs\"\nfunc A() int { return 1 }\n".to_string(),
+        );
+        files.insert(
+            "b.gs".to_string(),
+            "import \"a.gs\"\nfunc B() int { return 2 }\n".to_string(),
+        );
+        let mut vm = VirtualMachine::new();
+        vm.set_resolver(Rc::new(MemoryScriptResolver::new(files)));
+        let src = "import \"a.gs\"\nfunc Main() int { return 0 }\n";
+        let err = vm.compile(src).unwrap_err();
+        assert!(err.message.contains("circular import"), "{}", err.message);
+    }
+
+    #[test]
+    fn unresolved_import_is_an_error() {
+        let mut vm = VirtualMachine::new();
+        vm.set_resolver(Rc::new(MemoryScriptResolver::new(HashMap::new())));
+        let src = "import \"missing.gs\"\nfunc Main() int { return 0 }\n";
+        let err = vm.compile(src).unwrap_err();
+        assert!(err.message.contains("missing.gs"), "{}", err.message);
     }
 
     #[test]

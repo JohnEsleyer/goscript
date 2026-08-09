@@ -100,7 +100,7 @@ impl Parser {
             self.skip_semicolons();
             match self.cur_kind() {
                 Some(TokenKind::Eof) | None => break,
-                _ => stmts.push(self.parse_statement()?),
+                _ => stmts.extend(self.parse_top_level_statement()?),
             }
         }
         Ok(stmts)
@@ -124,10 +124,75 @@ impl Parser {
                         tok.col,
                     ));
                 }
-                _ => stmts.push(self.parse_statement()?),
+                _ => stmts.extend(self.parse_top_level_statement()?),
             }
         }
         Ok(stmts)
+    }
+
+    /// Parses one statement, except a grouped `import (...)` expands to many.
+    fn parse_top_level_statement(&mut self) -> Result<Vec<Stmt>, Error> {
+        if matches!(self.cur_kind(), Some(TokenKind::Import)) {
+            self.parse_import()
+        } else {
+            Ok(vec![self.parse_statement()?])
+        }
+    }
+
+    /// `import "path/file.gs"` or `import ("a.gs" "b.gs")`. Grouped imports
+    /// return one `Stmt::Import` per path.
+    fn parse_import(&mut self) -> Result<Vec<Stmt>, Error> {
+        let line = self.cur_line();
+        self.pos += 1; // 'import'
+        let mut paths = Vec::new();
+        if matches!(self.cur_kind(), Some(TokenKind::LParen)) {
+            self.pos += 1;
+            loop {
+                self.skip_semicolons();
+                match self.cur_kind() {
+                    Some(TokenKind::RParen) => {
+                        self.pos += 1;
+                        break;
+                    }
+                    Some(TokenKind::Str(path)) => {
+                        paths.push(path);
+                        self.pos += 1;
+                    }
+                    Some(TokenKind::Eof) | None => {
+                        let tok = self.peek().cloned().unwrap();
+                        return Err(Error::new(
+                            "unterminated grouped import, expected ')'",
+                            tok.line,
+                            tok.col,
+                        ));
+                    }
+                    _ => {
+                        let tok = self.peek().cloned().unwrap();
+                        return Err(Error::new(
+                            "expected import path string",
+                            tok.line,
+                            tok.col,
+                        ));
+                    }
+                }
+            }
+        } else {
+            let tok = self.advance()?;
+            match tok.kind {
+                TokenKind::Str(path) => paths.push(path),
+                other => {
+                    return Err(Error::new(
+                        format!("expected import path string, found {}", other.describe()),
+                        tok.line,
+                        tok.col,
+                    ));
+                }
+            }
+        }
+        Ok(paths
+            .into_iter()
+            .map(|path| Stmt::Import { path, line })
+            .collect())
     }
 
     fn parse_statement(&mut self) -> Result<Stmt, Error> {
@@ -135,6 +200,18 @@ impl Parser {
             Some(TokenKind::Var) => self.parse_var_decl(),
             Some(TokenKind::KwType) => self.parse_struct_decl(),
             Some(TokenKind::Func) => self.parse_func_decl(),
+            Some(TokenKind::Import) => {
+                let mut imports = self.parse_import()?;
+                if imports.len() > 1 {
+                    let tok = self.peek().cloned().unwrap();
+                    return Err(Error::new(
+                        "grouped imports are only allowed at file scope",
+                        tok.line,
+                        tok.col,
+                    ));
+                }
+                Ok(imports.remove(0))
+            }
             Some(TokenKind::If) => self.parse_if(),
             Some(TokenKind::For) => self.parse_for(),
             Some(TokenKind::Switch) => self.parse_switch(),

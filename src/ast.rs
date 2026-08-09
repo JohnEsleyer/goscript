@@ -78,6 +78,10 @@ pub type Block = Vec<Stmt>;
 
 #[derive(Debug, Clone)]
 pub enum Stmt {
+    Import {
+        path: String,
+        line: usize,
+    },
     VarDecl {
         name: String,
         init: Option<Expr>,

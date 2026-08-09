@@ -59,6 +59,9 @@ impl HotReloadEngine {
         let mut lexer = Lexer::new(&source);
         let tokens = lexer.tokenize()?;
         let ast = parser::parse(tokens)?;
+        // Resolve `import`ed modules against the VM's resolver so hot reload
+        // keeps module namespacing in sync with the compiled script.
+        let ast = crate::resolver::resolve_imports(ast, self.vm.resolver.as_ref())?;
 
         // Preserve live global values across code swaps: recompiling the top
         // level must not reset variables that already exist in the VM.

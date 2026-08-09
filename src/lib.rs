@@ -13,6 +13,8 @@
 //! - anti-freeze instruction guard ([`VirtualMachine::set_max_instructions`])
 //! - runtime errors carry script source lines (P1 source mapping)
 //! - `range` loops and explicit type casts (`int`, `float64`, `string`, `bool`)
+//! - local imports & module namespacing: `import "utils/math_helpers.gs"` then
+//!   `math_helpers.Lerp(...)`; files are supplied by a [`ScriptResolver`]
 //!
 //! Example:
 //! ```
@@ -43,6 +45,7 @@ pub mod hot_reload;
 pub mod lexer;
 pub mod opcode;
 pub mod parser;
+pub mod resolver;
 pub mod value;
 pub mod vm;
 
@@ -51,5 +54,6 @@ pub use error::Error;
 pub use function::CompiledFunction;
 pub use hot_reload::HotReloadEngine;
 pub use opcode::OpCode;
+pub use resolver::{extract_module_name, DiskScriptResolver, MemoryScriptResolver, ScriptResolver};
 pub use value::Value;
 pub use vm::VirtualMachine;
