@@ -1,11 +1,11 @@
 //! Local import & module system.
 //!
-//! GoScript scripts can pull in sibling files with `import "path/file.go"`.
+//! GoScript scripts can pull in sibling files with `import "path/file.gos"`.
 //! The [`ScriptResolver`] trait lets host engines supply file contents (the
 //! real filesystem, embedded bytes, or a virtual archive);
 //! [`DiskScriptResolver`] reads from disk by default.
 //!
-//! Imports are namespaced: importing `utils/math_helpers.go` makes its
+//! Imports are namespaced: importing `utils/math_helpers.gos` makes its
 //! top-level functions and variables available as `math_helpers.Lerp(...)` and
 //! `math_helpers.SomeGlobal`. Circular import chains are rejected.
 
@@ -53,7 +53,7 @@ impl ScriptResolver for MemoryScriptResolver {
 }
 
 /// Derives the namespace name from a script path.
-/// `"utils/math_helpers.go"` -> `"math_helpers"`.
+/// `"utils/math_helpers.gos"` -> `"math_helpers"`.
 pub fn extract_module_name(path: &str) -> String {
     Path::new(path)
         .file_stem()

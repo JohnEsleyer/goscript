@@ -13,7 +13,7 @@
 //! - anti-freeze instruction guard ([`VirtualMachine::set_max_instructions`])
 //! - runtime errors carry script source lines (P1 source mapping)
 //! - `range` loops and explicit type casts (`int`, `float64`, `string`, `bool`)
-//! - local imports & module namespacing: `import "utils/math_helpers.go"` then
+//! - local imports & module namespacing: `import "utils/math_helpers.gos"` then
 //!   `math_helpers.Lerp(...)`; files are supplied by a [`ScriptResolver`]
 //!
 //! Example:

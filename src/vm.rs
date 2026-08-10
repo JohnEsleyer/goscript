@@ -73,7 +73,7 @@ pub struct VirtualMachine {
     /// Uses `Rc<Cell>` so closures can capture it without borrow conflicts
     /// with `host_fns` (interior mutability, no `&mut self` needed).
     rand_state: Rc<Cell<u64>>,
-    /// Supplies imported script files (`import "path/file.go"`). Defaults to
+    /// Supplies imported script files (`import "path/file.gos"`). Defaults to
     /// the filesystem; host engines may override with embedded/virtual files.
     pub resolver: Rc<dyn ScriptResolver>,
 }
@@ -1363,7 +1363,7 @@ func FromText() int { return int("7") }
     fn imports_resolve_modules_and_namespace() {
         let mut files = HashMap::new();
         files.insert(
-            "utils/math_helpers.go".to_string(),
+            "utils/math_helpers.gos".to_string(),
             r#"
             func Lerp(a float64, b float64, t float64) float64 {
                 return a + (b - a) * t
@@ -1374,7 +1374,7 @@ func FromText() int { return int("7") }
         let mut vm = VirtualMachine::new();
         vm.set_resolver(Rc::new(MemoryScriptResolver::new(files)));
         let src = r#"
-        import "utils/math_helpers.go"
+        import "utils/math_helpers.gos"
         func Use() float64 { return math_helpers.Lerp(10.0, 100.0, 0.5) }
         func UseVar() int { return math_helpers.Scale() }
         "#;
@@ -1387,14 +1387,14 @@ func FromText() int { return int("7") }
     #[test]
     fn grouped_imports() {
         let mut files = HashMap::new();
-        files.insert("a.go".to_string(), "func Alpha() int { return 1 }\n".to_string());
-        files.insert("b.go".to_string(), "func Beta() int { return 2 }\n".to_string());
+        files.insert("a.gos".to_string(), "func Alpha() int { return 1 }\n".to_string());
+        files.insert("b.gos".to_string(), "func Beta() int { return 2 }\n".to_string());
         let mut vm = VirtualMachine::new();
         vm.set_resolver(Rc::new(MemoryScriptResolver::new(files)));
         let src = r#"
         import (
-            "a.go"
-            "b.go"
+            "a.gos"
+            "b.gos"
         )
         func Sum() int { return a.Alpha() + b.Beta() }
         "#;
@@ -1407,14 +1407,14 @@ func FromText() int { return int("7") }
     fn imported_module_globals_and_self_references() {
         let mut files = HashMap::new();
         files.insert(
-            "counter.go".to_string(),
+            "counter.gos".to_string(),
             "var count = 10\nfunc Bump(n int) int {\n count = count + n\n return count }\n"
                 .to_string(),
         );
         let mut vm = VirtualMachine::new();
         vm.set_resolver(Rc::new(MemoryScriptResolver::new(files)));
         let src = r#"
-        import "counter.go"
+        import "counter.gos"
         func Read() int { return counter.count }
         func Add() int { return counter.Bump(5) }
         "#;
@@ -1428,16 +1428,16 @@ func FromText() int { return int("7") }
     fn circular_imports_are_rejected() {
         let mut files = HashMap::new();
         files.insert(
-            "a.go".to_string(),
-            "import \"b.go\"\nfunc A() int { return 1 }\n".to_string(),
+            "a.gos".to_string(),
+            "import \"b.gos\"\nfunc A() int { return 1 }\n".to_string(),
         );
         files.insert(
-            "b.go".to_string(),
-            "import \"a.go\"\nfunc B() int { return 2 }\n".to_string(),
+            "b.gos".to_string(),
+            "import \"a.gos\"\nfunc B() int { return 2 }\n".to_string(),
         );
         let mut vm = VirtualMachine::new();
         vm.set_resolver(Rc::new(MemoryScriptResolver::new(files)));
-        let src = "import \"a.go\"\nfunc Main() int { return 0 }\n";
+        let src = "import \"a.gos\"\nfunc Main() int { return 0 }\n";
         let err = vm.compile(src).unwrap_err();
         assert!(err.message.contains("circular import"), "{}", err.message);
     }
@@ -1446,14 +1446,14 @@ func FromText() int { return int("7") }
     fn unresolved_import_is_an_error() {
         let mut vm = VirtualMachine::new();
         vm.set_resolver(Rc::new(MemoryScriptResolver::new(HashMap::new())));
-        let src = "import \"missing.go\"\nfunc Main() int { return 0 }\n";
+        let src = "import \"missing.gos\"\nfunc Main() int { return 0 }\n";
         let err = vm.compile(src).unwrap_err();
-        assert!(err.message.contains("missing.go"), "{}", err.message);
+        assert!(err.message.contains("missing.gos"), "{}", err.message);
     }
 
     #[test]
     fn hot_reload_preserves_global_state() {
-        let path = PathBuf::from(std::env::temp_dir()).join("goscript_test_reload.go");
+        let path = PathBuf::from(std::env::temp_dir()).join("goscript_test_reload.gos");
         fs::write(&path, "var value = 7\nfunc GetValue() int { return value }\n").unwrap();
         let mut engine = HotReloadEngine::new(path.to_str().unwrap());
         engine.reload_if_changed().unwrap();

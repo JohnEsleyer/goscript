@@ -34,12 +34,12 @@ fn run_script_file(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Engine-style demo: hot-reload a `.go` file and drive OnUpdate() frame by
+/// Engine-style demo: hot-reload a `.gos` file and drive OnUpdate() frame by
 /// frame. Frame delta is pushed into the VM (`time.Delta()`) and the script
 /// freely uses the native `math`, `fmt`, `rand`, and `time` packages.
 fn run_engine_demo() -> Result<(), Box<dyn std::error::Error>> {
-    let script_path = PathBuf::from(env::temp_dir()).join("goscript_actor.go");
-    let demo = fs::read_to_string("examples/stdlib_demo.go")?;
+    let script_path = PathBuf::from(env::temp_dir()).join("goscript_actor.gos");
+    let demo = fs::read_to_string("examples/stdlib_demo.gos")?;
     fs::write(&script_path, demo)?;
 
     let mut engine = goscript::HotReloadEngine::new(script_path.to_str().unwrap());
