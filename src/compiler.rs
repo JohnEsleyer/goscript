@@ -43,6 +43,10 @@ impl Compiler {
     pub fn compile(mut self, stmts: &[Stmt]) -> CompiledFunction {
         self.compile_block(stmts);
         self.emit_op(OpCode::Return);
+        // All locals (params + declared, including ones inside loops/blocks
+        // that may never execute) are known now; record the slot count so the
+        // VM can pre-allocate them at call time.
+        self.function.max_locals = self.locals.len();
         self.function
     }
 
@@ -112,9 +116,8 @@ impl Compiler {
 
     fn compile_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            // Imports are resolved into the program by `resolver::resolve_imports`
-            // before compilation; nothing to emit if one slips through.
-            Stmt::Import { .. } => {}
+            // Package and import declarations are resolved before compilation.
+            Stmt::Package { .. } | Stmt::Import { .. } => {}
             Stmt::VarDecl { name, init, line } => {
                 self.current_line = *line;
                 if self.scope_depth > 0 {

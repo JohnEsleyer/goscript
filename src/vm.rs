@@ -406,6 +406,28 @@ impl VirtualMachine {
         Ok(Rc::new(compiled))
     }
 
+    /// Compiles all `.go` / `.gos` files inside a package directory as a single
+    /// package unit. This mirrors Go's package-level compilation model where
+    /// every file in a directory belongs to the same package.
+    pub fn compile_package(&self, package_path: &str) -> Result<Rc<CompiledFunction>, Error> {
+        let pkg_files = self
+            .resolver
+            .resolve_package(package_path)
+            .map_err(|e| Error::runtime(e))?;
+
+        let mut combined_ast = Vec::new();
+        for (_, source) in pkg_files {
+            let mut lexer = Lexer::new(&source);
+            let tokens = lexer.tokenize()?;
+            let ast = parser::parse(tokens)?;
+            combined_ast.extend(ast);
+        }
+
+        let ast = resolve_imports(combined_ast, self.resolver.as_ref())?;
+        let compiled = Compiler::new("main").compile(&ast);
+        Ok(Rc::new(compiled))
+    }
+
     pub fn execute(&mut self, main_fn: Rc<CompiledFunction>) -> Result<(), Error> {
         self.instruction_count = 0;
         self.frames.clear();
@@ -426,8 +448,14 @@ impl VirtualMachine {
             Some(Value::NativeFn(native)) => Ok(native(args)),
             Some(Value::Function(function)) => {
                 let slots_offset = self.stack.len();
+                let arg_count = args.len();
                 for arg in args {
                     self.stack.push(arg);
+                }
+                // Pre-allocate every local slot so locals declared inside loops
+                // or conditionals that never execute still have valid slots.
+                for _ in arg_count..function.max_locals {
+                    self.stack.push(Value::Nil);
                 }
                 self.frames.push(CallFrame {
                     function,
@@ -632,6 +660,11 @@ impl VirtualMachine {
                             }
                             Some(Value::Function(function)) => {
                                 let slots_offset = self.stack.len().saturating_sub(arg_count);
+                                // Pre-allocate local slots so locals declared in
+                                // loops/conditionals that never execute stay valid.
+                                for _ in arg_count..function.max_locals {
+                                    self.stack.push(Value::Nil);
+                                }
                                 self.frames.push(frame);
                                 frame = CallFrame {
                                     function,

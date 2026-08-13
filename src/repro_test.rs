@@ -102,4 +102,45 @@ func Read() float64 { return nums[-1] }
         let err = vm.call("Read", vec![]).unwrap_err();
         assert!(err.message.contains("out of bounds"), "{}", err.message);
     }
+
+    #[test]
+    fn local_inside_never_run_loop_keeps_slots_aligned() {
+        // A local declared inside a `while` body must still reserve its slot even
+        // when the loop never executes (empty pipe list at game start), otherwise
+        // a later local in the same function misaligns the operand stack.
+        let src = r#"
+type BirdController struct { VelocityY float64; Gravity float64; JumpForce float64 }
+var self = BirdController{ VelocityY: 0.0, Gravity: -16.0, JumpForce: 5.8 }
+func OnUpdate(dt float64) {
+    var pos = groot.GetSelfPosition()
+    var tops = groot.GetTagPositions("PipeTop")
+    var nearestPipeX = 10000.0
+    var targetY = 0.0
+    var i = 0
+    for i < len(tops) {
+        var pipeX = tops[i][0]
+        if pipeX > pos[0] && pipeX < nearestPipeX {
+            nearestPipeX = pipeX
+            targetY = tops[i][1] - 4.7
+        }
+        i = i + 1
+    }
+    if pos[1] < targetY && self.VelocityY <= 0 {
+        self.VelocityY = self.JumpForce
+    }
+    self.VelocityY = self.VelocityY + self.Gravity*dt
+    var newY = pos[1] + self.VelocityY*dt
+}
+"#;
+        let mut vm = setup();
+        vm.register_fn("groot.GetTagPositions", |_| {
+            Value::Slice(Rc::new(RefCell::new(vec![])))
+        });
+        let chunk = vm.compile(src).unwrap();
+        vm.execute(chunk).unwrap();
+        for _ in 0..5 {
+            let r = vm.call("OnUpdate", vec![Value::Float(0.016)]);
+            assert!(r.is_ok(), "OnUpdate should run with empty pipe list: {r:?}");
+        }
+    }
 }
