@@ -7,6 +7,7 @@ pub enum TokenKind {
     Str(String),
     Var,
     Func,
+    Package,
     Import,
     If,
     Else,
@@ -67,6 +68,7 @@ impl TokenKind {
             TokenKind::Str(_) => "string literal".into(),
             TokenKind::Var => "'var'".into(),
             TokenKind::Func => "'func'".into(),
+            TokenKind::Package => "'package'".into(),
             TokenKind::Import => "'import'".into(),
             TokenKind::If => "'if'".into(),
             TokenKind::Else => "'else'".into(),
@@ -471,6 +473,7 @@ fn keyword_or_ident(word: String) -> TokenKind {
     match word.as_str() {
         "var" => TokenKind::Var,
         "func" => TokenKind::Func,
+        "package" => TokenKind::Package,
         "import" => TokenKind::Import,
         "if" => TokenKind::If,
         "else" => TokenKind::Else,

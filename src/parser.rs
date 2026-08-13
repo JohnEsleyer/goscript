@@ -132,19 +132,27 @@ impl Parser {
 
     /// Parses one statement, except a grouped `import (...)` expands to many.
     fn parse_top_level_statement(&mut self) -> Result<Vec<Stmt>, Error> {
-        if matches!(self.cur_kind(), Some(TokenKind::Import)) {
-            self.parse_import()
-        } else {
-            Ok(vec![self.parse_statement()?])
+        match self.cur_kind() {
+            Some(TokenKind::Package) => Ok(vec![self.parse_package_decl()?]),
+            Some(TokenKind::Import) => self.parse_import(),
+            _ => Ok(vec![self.parse_statement()?]),
         }
     }
 
-    /// `import "path/file.gos"` or `import ("a.gos" "b.gos")`. Grouped imports
-    /// return one `Stmt::Import` per path.
+    fn parse_package_decl(&mut self) -> Result<Stmt, Error> {
+        let line = self.cur_line();
+        self.pos += 1; // 'package'
+        let name = self.expect_identifier("package name")?;
+        Ok(Stmt::Package { name, line })
+    }
+
+    /// `import "path/file.gos"` or `import alias "path/file.gos"` or
+    /// `import ("a.gos" alias "b.gos")`. Grouped imports return one
+    /// `Stmt::Import` per path.
     fn parse_import(&mut self) -> Result<Vec<Stmt>, Error> {
         let line = self.cur_line();
         self.pos += 1; // 'import'
-        let mut paths = Vec::new();
+        let mut imports: Vec<(String, Option<String>)> = Vec::new();
         if matches!(self.cur_kind(), Some(TokenKind::LParen)) {
             self.pos += 1;
             loop {
@@ -154,9 +162,26 @@ impl Parser {
                         self.pos += 1;
                         break;
                     }
-                    Some(TokenKind::Str(path)) => {
-                        paths.push(path);
+                    Some(TokenKind::Identifier(alias)) => {
+                        let alias = alias.clone();
                         self.pos += 1;
+                        if let Some(TokenKind::Str(path)) = self.cur_kind() {
+                            let path = path.clone();
+                            self.pos += 1;
+                            imports.push((path, Some(alias)));
+                        } else {
+                            let tok = self.peek().cloned().unwrap();
+                            return Err(Error::new(
+                                format!("expected import path string after alias '{alias}'"),
+                                tok.line,
+                                tok.col,
+                            ));
+                        }
+                    }
+                    Some(TokenKind::Str(path)) => {
+                        let path = path.clone();
+                        self.pos += 1;
+                        imports.push((path, None));
                     }
                     Some(TokenKind::Eof) | None => {
                         let tok = self.peek().cloned().unwrap();
@@ -169,7 +194,7 @@ impl Parser {
                     _ => {
                         let tok = self.peek().cloned().unwrap();
                         return Err(Error::new(
-                            "expected import path string",
+                            "expected import path string or alias identifier",
                             tok.line,
                             tok.col,
                         ));
@@ -177,9 +202,14 @@ impl Parser {
                 }
             }
         } else {
+            let mut alias = None;
+            if let Some(TokenKind::Identifier(a)) = self.cur_kind() {
+                alias = Some(a.clone());
+                self.pos += 1;
+            }
             let tok = self.advance()?;
             match tok.kind {
-                TokenKind::Str(path) => paths.push(path),
+                TokenKind::Str(path) => imports.push((path, alias)),
                 other => {
                     return Err(Error::new(
                         format!("expected import path string, found {}", other.describe()),
@@ -189,9 +219,9 @@ impl Parser {
                 }
             }
         }
-        Ok(paths
+        Ok(imports
             .into_iter()
-            .map(|path| Stmt::Import { path, line })
+            .map(|(path, alias)| Stmt::Import { path, alias, line })
             .collect())
     }
 
@@ -200,6 +230,7 @@ impl Parser {
             Some(TokenKind::Var) => self.parse_var_decl(),
             Some(TokenKind::KwType) => self.parse_struct_decl(),
             Some(TokenKind::Func) => self.parse_func_decl(),
+            Some(TokenKind::Package) => self.parse_package_decl(),
             Some(TokenKind::Import) => {
                 let mut imports = self.parse_import()?;
                 if imports.len() > 1 {

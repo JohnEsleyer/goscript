@@ -22,6 +22,25 @@ pub struct HotReloadEngine {
 }
 
 impl HotReloadEngine {
+    /// Create a `HotReloadEngine` from an in-memory source string instead of a
+    /// file path.  Used on WASM where the filesystem is unavailable; the
+    /// embedded script bytes are compiled and executed immediately so that
+    /// globals (e.g. `OnUpdate`, `OnStart`) are populated.
+    pub fn from_str(script_name: &str, source: &str) -> Self {
+        let mut engine = Self::new(script_name);
+
+        // Lex → parse → compile → execute (same pipeline as compile_and_swap
+        // but without any filesystem interaction).
+        let mut lexer = Lexer::new(source);
+        let tokens = lexer.tokenize().expect("from_str: tokenize failed");
+        let ast = parser::parse(tokens).expect("from_str: parse failed");
+        let compiler = Compiler::with_preserved_globals("main", HashSet::new());
+        let chunk = Rc::new(compiler.compile(&ast));
+        engine.vm.execute(chunk).expect("from_str: execute failed");
+
+        engine
+    }
+
     pub fn new(script_path: &str) -> Self {
         let mut vm = VirtualMachine::new();
         vm.register_fn("Log", |args| {

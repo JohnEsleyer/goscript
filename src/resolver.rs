@@ -1,9 +1,10 @@
 //! Local import & module system.
 //!
-//! GoScript scripts can pull in sibling files with `import "path/file.gos"`.
-//! The [`ScriptResolver`] trait lets host engines supply file contents (the
-//! real filesystem, embedded bytes, or a virtual archive);
-//! [`DiskScriptResolver`] reads from disk by default.
+//! GoScript scripts can pull in sibling files with `import "path/file.gos"`
+//! or entire package directories with `import "pkg/math"`.  The
+//! [`ScriptResolver`] trait lets host engines supply file contents (the real
+//! filesystem, embedded bytes, or a virtual archive); [`DiskScriptResolver`]
+//! reads from disk by default.
 //!
 //! Imports are namespaced: importing `utils/math_helpers.gos` makes its
 //! top-level functions and variables available as `math_helpers.Lerp(...)` and
@@ -17,18 +18,72 @@ use crate::ast::{Expr, Stmt};
 use crate::error::Error;
 use crate::lexer::Lexer;
 
-/// Trait implemented by host engines (Groot/Bevy) to supply script files by
-/// path. `resolve` returns the file contents, or an error string.
+/// Trait implemented by host engines (Groot) to supply script files by path.
+/// `resolve` returns a single file's contents.
+/// `resolve_package` returns all files in a package directory (or a single file).
 pub trait ScriptResolver {
-    fn resolve(&self, path: &str) -> Result<String, String>;
+    fn resolve(&self, path: &str) -> Result<String, String> {
+        let files = self.resolve_package(path)?;
+        files
+            .into_iter()
+            .next()
+            .map(|(_, content)| content)
+            .ok_or_else(|| format!("file not found: '{path}'"))
+    }
+
+    /// Resolves a path (file or package directory).
+    /// Returns a list of (file_path, file_contents) pairs for all package files.
+    fn resolve_package(&self, path: &str) -> Result<Vec<(String, String)>, String>;
 }
 
-/// Default filesystem-backed resolver: `fs::read_to_string(path)`.
+/// Default filesystem-backed resolver.
 pub struct DiskScriptResolver;
 
 impl ScriptResolver for DiskScriptResolver {
-    fn resolve(&self, path: &str) -> Result<String, String> {
-        fs::read_to_string(path).map_err(|e| format!("cannot read '{path}': {e}"))
+    fn resolve_package(&self, path: &str) -> Result<Vec<(String, String)>, String> {
+        let p = Path::new(path);
+        if p.is_dir() {
+            let entries =
+                fs::read_dir(p).map_err(|e| format!("cannot read directory '{path}': {e}"))?;
+            let mut paths: Vec<_> = entries
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| {
+                    p.is_file()
+                        && p.extension()
+                            .map_or(false, |ext| ext == "go" || ext == "gos")
+                })
+                .collect();
+            paths.sort();
+            let mut files = Vec::new();
+            for file_path in paths {
+                let content = fs::read_to_string(&file_path)
+                    .map_err(|e| format!("cannot read '{}': {e}", file_path.display()))?;
+                files.push((file_path.to_string_lossy().to_string(), content));
+            }
+            if files.is_empty() {
+                return Err(format!("no .go or .gos files found in directory '{path}'"));
+            }
+            Ok(files)
+        } else if p.is_file() {
+            let content =
+                fs::read_to_string(p).map_err(|e| format!("cannot read '{path}': {e}"))?;
+            Ok(vec![(path.to_string(), content)])
+        } else {
+            // Try appending .go / .gos extensions
+            let go_path = format!("{path}.go");
+            if Path::new(&go_path).is_file() {
+                let content = fs::read_to_string(&go_path)
+                    .map_err(|e| format!("cannot read '{go_path}': {e}"))?;
+                return Ok(vec![(go_path, content)]);
+            }
+            let gos_path = format!("{path}.gos");
+            if Path::new(&gos_path).is_file() {
+                let content = fs::read_to_string(&gos_path)
+                    .map_err(|e| format!("cannot read '{gos_path}': {e}"))?;
+                return Ok(vec![(gos_path, content)]);
+            }
+            Err(format!("cannot resolve package or file path '{path}'"))
+        }
     }
 }
 
@@ -44,11 +99,37 @@ impl MemoryScriptResolver {
 }
 
 impl ScriptResolver for MemoryScriptResolver {
-    fn resolve(&self, path: &str) -> Result<String, String> {
-        self.files
-            .get(path)
-            .cloned()
-            .ok_or_else(|| format!("file not found: '{path}'"))
+    fn resolve_package(&self, path: &str) -> Result<Vec<(String, String)>, String> {
+        // Check if it's a directory-like prefix (e.g. "pkg/math" matches "pkg/math/vector.go")
+        let prefix = if path.ends_with('/') {
+            path.to_string()
+        } else {
+            format!("{path}/")
+        };
+        let mut dir_files: Vec<_> = self
+            .files
+            .iter()
+            .filter(|(k, _)| k.starts_with(&prefix))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        if !dir_files.is_empty() {
+            dir_files.sort_by(|a, b| a.0.cmp(&b.0));
+            return Ok(dir_files);
+        }
+        // Try as a single file
+        if let Some(content) = self.files.get(path) {
+            return Ok(vec![(path.to_string(), content.clone())]);
+        }
+        // Try with .go / .gos extension
+        let go_path = format!("{path}.go");
+        if let Some(content) = self.files.get(&go_path) {
+            return Ok(vec![(go_path, content.clone())]);
+        }
+        let gos_path = format!("{path}.gos");
+        if let Some(content) = self.files.get(&gos_path) {
+            return Ok(vec![(gos_path, content.clone())]);
+        }
+        Err(format!("file not found: '{path}'"))
     }
 }
 
@@ -102,15 +183,10 @@ fn resolve_file(
 
     for stmt in stmts {
         match stmt {
-            Stmt::Import { path, line } => {
-                let name = extract_module_name(&path);
-                if modules.contains(&name) {
-                    return Err(Error::new(
-                        format!("duplicate import of module '{name}'"),
-                        line,
-                        0,
-                    ));
-                }
+            Stmt::Package { .. } => {
+                // Metadata for namespace resolution; stripped from runtime execution.
+            }
+            Stmt::Import { path, alias, line } => {
                 if visited.contains(&path) {
                     return Err(Error::new(
                         format!("circular import detected ('{path}' already in the chain)"),
@@ -118,17 +194,46 @@ fn resolve_file(
                         0,
                     ));
                 }
-                let source = resolver.resolve(&path).map_err(|e| {
+
+                // Resolve all files in the package (directory or single file)
+                let pkg_files = resolver.resolve_package(&path).map_err(|e| {
                     Error::new(format!("cannot resolve import '{path}': {e}"), line, 0)
                 })?;
-                let mut lexer = Lexer::new(&source);
-                let tokens = lexer.tokenize()?;
-                let ast = crate::parser::parse(tokens)?;
-                visited.insert(path.clone());
-                let imported = resolve_file(ast, Some(&name), resolver, visited)?;
+
+                let mut combined_ast = Vec::new();
+                let mut declared_pkg = None;
+
+                for (file_path, source) in &pkg_files {
+                    let mut lexer = Lexer::new(source);
+                    let tokens = lexer.tokenize()?;
+                    let ast = crate::parser::parse(tokens)?;
+
+                    if declared_pkg.is_none() {
+                        declared_pkg = ast.iter().find_map(|s| match s {
+                            Stmt::Package { name, .. } => Some(name.clone()),
+                            _ => None,
+                        });
+                    }
+
+                    visited.insert(file_path.clone());
+                    combined_ast.extend(ast);
+                }
+
+                // Resolution priority: 1. Import alias -> 2. Declared package -> 3. File stem
+                let name = alias.unwrap_or_else(|| {
+                    declared_pkg.unwrap_or_else(|| extract_module_name(&path))
+                });
+
+                if modules.contains(&name) {
+                    return Err(Error::new(
+                        format!("duplicate import of module '{name}'"),
+                        line,
+                        0,
+                    ));
+                }
+
+                let imported = resolve_file(combined_ast, Some(&name), resolver, visited)?;
                 out.extend(imported);
-                // Future parses (e.g. hot reload) see dotted module access as
-                // a package call rather than a struct field/method read.
                 crate::parser::declare_package(&name);
                 modules.insert(name);
             }
@@ -145,8 +250,6 @@ fn resolve_file(
     match module_name {
         None => Ok(out),
         Some(prefix) => {
-            // Namespace this file's own top-level declarations and qualify its
-            // internal references to them.
             let mut own: HashSet<String> = HashSet::new();
             let scoped: Vec<Stmt> = out
                 .into_iter()
@@ -177,13 +280,10 @@ fn resolve_file_with_deps(
     visited: &mut HashSet<String>,
     _deps: &HashSet<String>,
 ) -> Result<Vec<Stmt>, Error> {
-    // resolve_file already populates `visited` with all imported paths.
     resolve_file(stmts, module_name, resolver, visited)
 }
 
 /// Prefixes a top-level declaration's name with `prefix` (imported modules).
-/// Receiver methods keep their `<Type>.<Method>` registration and struct types
-/// are compile-time metadata only, so neither is namespaced.
 fn prefix_decl(stmt: Stmt, prefix: &str) -> Stmt {
     match stmt {
         Stmt::FuncDecl { name, receiver: None, params, body, line } => Stmt::FuncDecl {
@@ -203,8 +303,7 @@ fn prefix_decl(stmt: Stmt, prefix: &str) -> Stmt {
 }
 
 // ---------------------------------------------------------------------------
-// Dotted-reference rewriting: `submod.X(...)` / `submod.X` become dotted
-// global names so calls hit the namespaced module globals.
+// Dotted-reference rewriting
 // ---------------------------------------------------------------------------
 
 fn rewrite_import_refs_block(block: Vec<Stmt>, modules: &HashSet<String>) -> Vec<Stmt> {
@@ -216,6 +315,8 @@ fn rewrite_import_refs_block(block: Vec<Stmt>, modules: &HashSet<String>) -> Vec
 
 fn rewrite_import_refs(stmt: Stmt, modules: &HashSet<String>) -> Stmt {
     match stmt {
+        Stmt::Package { .. } => stmt,
+        Stmt::Import { .. } => stmt,
         Stmt::VarDecl { name, init, line } => Stmt::VarDecl {
             name,
             init: init.map(|e| rewrite_import_refs_expr(e, modules)),
@@ -290,8 +391,6 @@ fn rewrite_import_refs(stmt: Stmt, modules: &HashSet<String>) -> Stmt {
         Stmt::Break(line) => Stmt::Break(line),
         Stmt::Continue(line) => Stmt::Continue(line),
         Stmt::Expr(e, line) => Stmt::Expr(rewrite_import_refs_expr(e, modules), line),
-        // Imports are resolved above; left as-is defensively.
-        Stmt::Import { path, line } => Stmt::Import { path, line },
     }
 }
 
@@ -389,6 +488,8 @@ fn rewrite_import_refs_expr(expr: Expr, modules: &HashSet<String>) -> Expr {
 
 fn rewrite_self_refs(stmt: Stmt, own: &HashSet<String>, prefix: &str) -> Stmt {
     match stmt {
+        Stmt::Package { .. } => stmt,
+        Stmt::Import { .. } => stmt,
         Stmt::VarDecl { name, init, line } => Stmt::VarDecl {
             name,
             init: init.map(|e| rewrite_self_refs_expr(e, own, prefix)),
@@ -457,7 +558,6 @@ fn rewrite_self_refs(stmt: Stmt, own: &HashSet<String>, prefix: &str) -> Stmt {
         Stmt::Break(line) => Stmt::Break(line),
         Stmt::Continue(line) => Stmt::Continue(line),
         Stmt::Expr(e, line) => Stmt::Expr(rewrite_self_refs_expr(e, own, prefix), line),
-        Stmt::Import { path, line } => Stmt::Import { path, line },
     }
 }
 

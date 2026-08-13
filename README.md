@@ -49,6 +49,12 @@ Fast, dependency-free core:
 - **Go-flavored syntax** — `var`, `func`, `if`/`else`, `for`, `type struct`,
   typed parameters and `:=` short declarations, `//` and `/* */` comments,
   automatic semicolon insertion (ASI) so semicolons are optional.
+- **Packages & imports** — `package` declarations, `import "path/file.gos"`
+  with optional aliases (`import util "utils/math.gos"`), grouped
+  `import (...)` blocks, and whole-directory imports (`import "pkg/math"`)
+  resolved through the host's [`ScriptResolver`](src/resolver.rs).
+- **Slices** — `[]float64{...}` literals, `len`, `append`, and index access,
+  backed by `Rc<RefCell<Vec<Value>>>`.
 - **Dynamically typed values** (optional type annotations accepted and ignored) —
   `nil`, `int` (i64), `float` (f64), `string`, `bool`.
 - **Structs** — `type Player struct { hp int }`, struct literals
@@ -113,6 +119,14 @@ let changed = engine.reload_if_changed()?;  // recompiles only when the file cha
 engine.vm.call("OnUpdate", vec![Value::Float(dt)])?;
 ```
 
+On filesystem-less platforms (e.g. WASM), build an engine directly from an
+in-memory source string:
+
+```rust
+let mut engine = HotReloadEngine::from_str("player.gos", source)?;
+engine.vm.call("OnUpdate", vec![Value::Float(dt)])?;
+```
+
 ## Standard library
 
 Sandboxed: no `os`, no `net`, no `exec` — nothing a third-party mod could use
@@ -161,8 +175,10 @@ vm.set_delta_time(0.016);             // feed frame dt to time.Delta()
 | Functions | `func Add(a int, b int) int { return a + b }` |
 | Structs | `type Transform struct { X, Y float64 }` + `Transform{X: 0, Y: 0}` |
 | Field access | `player.hp = player.hp - 25`, `transform.X` |
+| Slices | `[]float64{1, 2, 3}`, `len(x)`, `append(x, 4)`, `x[i]` |
 | Packages | `math.Sqrt(x)`, `fmt.Sprintf(...)`, `rand.Intn(n)`, `time.Delta()` |
-| Types | `nil`, ints, floats, strings, bools, structs |
+| Imports | `import "utils/math.gos"`, `import u "utils/math.gos"`, `import "pkg/math"`, `import (...)` |
+| Types | `nil`, ints, floats, strings, bools, structs, slices |
 | Operators | arithmetic, comparison, `&&` / `\|\|` / `!`, string concatenation with `+` |
 | Host bridge | `register_fn(name, fn(Vec<Value>) -> Value)` |
 | Hot reload | `HotReloadEngine::reload_if_changed()` preserves live globals |
@@ -170,7 +186,9 @@ vm.set_delta_time(0.016);             // feed frame dt to time.Delta()
 ## Roadmap
 
 Done: bytecode VM, structs (reference semantics), hot reloading, native
-standard library (`math`, `fmt`, `rand`, `time`, `strings`).
+standard library (`math`, `fmt`, `rand`, `time`, `strings`), packages,
+imports (with aliases and directory resolution), slices, and `package` / `import`
+declarations.
 
 ### Todo
 
@@ -183,12 +201,17 @@ standard library (`math`, `fmt`, `rand`, `time`, `strings`).
 - [x] `groot_plugin.rs` rewrite — sync-input, process-commands, run-scripts systems
 - [x] Scene setup in `main.rs` — multi-entity demo with player, enemy, NPC, camera
 - [x] Script assets — `player.gos`, `enemy.gos`, `npc.gos`, `utils/math_helpers.gos`
+- [x] Packages & imports — `package` declarations, aliases, directory imports, `resolve_package` resolver method, `from_str` constructor
+- [x] Slices — literals, `len`, `append`, index access
+- [x] Locals-slot stability — locals declared inside `while`/`for` bodies now
+      pre-allocate their stack slots (`CompiledFunction.max_locals`), so scripts
+      with conditional/loop-local variables compile and run reliably
 
 Still planned:
 
 - **Methods** — `entity.Move(dx, dy)` sugar over host bindings.
 - **Closures** and first-class function values.
-- **Arrays/slices**, `range`, and a small standard library.
+- **`range`** loops over slices.
 
 ## License
 
